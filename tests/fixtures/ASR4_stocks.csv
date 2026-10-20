@@ -1,0 +1,10 @@
+component,role,units,stock_conc,final_conc
+MgCl2,factor,mM,1000,
+Kcl,factor,mM,2000,
+PEG8000,factor,% v/v,40,
+Betaine,factor,mM,100,
+Trehalose,factor,%,40,
+TCEP,factor,mM,500,
+CaCl2,factor,mM,100,
+Tween20,factor,% v/v,10,
+Tris-HCl pH 8.3,constant,mM,1000,250
