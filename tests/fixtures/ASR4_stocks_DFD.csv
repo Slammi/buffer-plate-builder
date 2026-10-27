@@ -1,0 +1,9 @@
+component,role,units,stock_conc
+MgCl2,factor,mM,1000
+KCl,factor,mM,2000
+PEG8000,factor,%v/v,60
+Betaine,factor,mM,27
+Trehalose,factor,%v/v,40
+TCEP,factor,mM,500
+CaCl2,factor,mM,25
+Tween20,factor,%v/v,10

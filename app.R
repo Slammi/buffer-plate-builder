@@ -215,6 +215,25 @@ ui <- page_sidebar(
       checkboxInput("include_failed", "Include OVER VOLUME wells", FALSE),
       div(class = "mb-2", downloadButton("dl_picklist", "Download picklist CSV", class = "btn-sm")),
       DTOutput("picklist")
+    ),
+    nav_panel(
+      "Dragonfly",
+      p(class = "text-muted small",
+        "Dispense file for the SPT Labtech Dragonfly: one block of well volumes (µL) per source, ",
+        "water as \"Diluent\", in the order of addition set on the Picklist tab. ",
+        "The fixed mix is not included."),
+      layout_columns(
+        col_widths = c(4, 8),
+        div(
+          uiOutput("dfd_plate_ui"),
+          checkboxInput("dfd_fill_unused", "Fill wells without a run with diluent (final volume)", TRUE),
+          checkboxInput("dfd_include_failed", "Dispense OVER VOLUME wells anyway (no diluent)", FALSE),
+          downloadButton("dl_dfd", "Download Dragonfly file", class = "btn-primary")
+        ),
+        uiOutput("dfd_warning")
+      ),
+      div(class = "mt-3", tags$strong("Preview")),
+      verbatimTextOutput("dfd_preview")
     )
   )
 )
@@ -601,6 +620,44 @@ server <- function(input, output, session) {
   })
   picklist_table <- reactive(picklist(res()$transfers, addition_order(), input$include_failed))
   output$picklist <- renderDT(dt(picklist_table(), page = 50))
+
+  # ---- Dragonfly dispense file
+  n_plates <- reactive(max(res()$volumes$plate))
+  output$dfd_plate_ui <- renderUI({
+    n <- n_plates()
+    if (n > 1) selectInput("dfd_plate", "Plate (one file per plate)", seq_len(n),
+                           selected = min(as.integer(isolate(input$dfd_plate) %||% 1), n))
+  })
+  dfd_plate <- reactive(min(as.integer(input$dfd_plate %||% 1), n_plates()))
+  dfd_lines <- reactive({
+    dragonfly_dfd(res(), plate = dfd_plate(), order = addition_order(),
+                  include_failed = isTRUE(input$dfd_include_failed),
+                  fill_unused = isTRUE(input$dfd_fill_unused))
+  })
+  output$dfd_warning <- renderUI({
+    v <- res()$volumes
+    v <- v[v$plate == dfd_plate(), ]
+    n_over <- sum(v$status == "OVER VOLUME")
+    n_below <- sum(v$status == "BELOW MIN")
+    tagList(
+      if (n_over) div(class = "alert alert-danger py-2", sprintf(
+        "%d well(s) on this plate are OVER VOLUME and %s. Fix them on the Inputs page before dispensing.",
+        n_over, if (isTRUE(input$dfd_include_failed)) "are dispensed without diluent (they will overflow)"
+        else "are left empty in this file")),
+      if (n_below) div(class = "alert alert-warning py-2", sprintf(
+        "%d well(s) on this plate have a volume below the minimum pipettable volume.", n_below)),
+      if (!n_over && !n_below) div(class = "alert alert-success py-2", "All wells on this plate fit.")
+    )
+  })
+  output$dfd_preview <- renderText(paste(dfd_lines(), collapse = "\n"))
+  output$dl_dfd <- downloadHandler(
+    function() {
+      nm <- design_name()
+      base <- if (is.null(nm)) "Buffer screen" else tools::file_path_sans_ext(nm)
+      paste0(base, " DFD", if (n_plates() > 1) paste0(" plate ", dfd_plate()), ".csv")
+    },
+    function(file) write_dfd(dfd_lines(), file)
+  )
 
   # ---- Downloads
   output$dl_stocks <- downloadHandler("stocks.csv", function(file) write_stocks(stocks(), file))

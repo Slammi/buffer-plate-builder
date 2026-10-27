@@ -74,6 +74,7 @@ These are the main value over the spreadsheet:
 - **Volumes table.** Run, plate, well, volume per component, fixed, water, total, status.
 - **Stock preparation table.** Total dispensed + overage + dead volume per stock, and the number of wells receiving it.
 - **Picklist CSV.** Columns: step, source, destination plate, destination well, volume. Drop zero volumes. Order of addition: water → constant buffers → salts → other additives → viscous components (PEG) → fixed mix last. Make the order editable.
+- **Dragonfly dispense file (DFD).** The file fed to the SPT Labtech Dragonfly, matching `tests/fixtures/ASR4_Screening_DFD.csv`: header `version, '1.2` / `TreatAsVolumes, true`, then one plate-shaped block of µL per source (`Diluent` = water, others `<name> - <stock> <units>`), 6 decimals, CRLF line endings, one file per plate. Blocks follow the order of addition; the fixed mix is left out; OVER VOLUME wells are left empty by default; wells without a run get diluent to the final volume by default. Built by `dragonfly_dfd()` in `R/dragonfly.R`; the reference file (PEG30 design, 50 µL, `tests/fixtures/ASR4_stocks_DFD.csv`) is a regression test.
 - **Excel export.** One workbook with all of the above. **Lesson from the Excel version:** make sure only one sheet is selected when saving. Grouped tabs caused edits to overwrite the design sheet.
 
 ## UI layout (Shiny)
@@ -82,6 +83,7 @@ These are the main value over the spreadsheet:
 - **Tab "Diagnostics":** feasibility rule, failing-wells table, minimum-stock suggestions, optimiser.
 - **Tab "Plate maps":** a component selector and the heatmap.
 - **Tab "Volumes" / "Picklist":** tables plus download buttons.
+- **Tab "Dragonfly":** options, warnings for failing wells, a preview and the DFD download.
 
 ## Regression test: must match the Excel calculator
 Fixtures: `tests/fixtures/ASR4_design_PEG24.csv` + `tests/fixtures/ASR4_stocks.csv`

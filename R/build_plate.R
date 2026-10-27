@@ -9,7 +9,8 @@
 #' @param components Design columns to treat as components (default: auto-detected).
 #' @param addition_order Source names in order of addition (default: default_addition_order()).
 #' @param include_failed_in_picklist Keep OVER VOLUME wells in the picklist.
-#' @return A list: settings, design, design_matrix, stocks, problems, layout,
+#' @return A list: settings, design, design_matrix, stocks (names as in the
+#'   design), stock_table (as entered), problems, layout,
 #'   concentrations, runs, volumes, transfers, summary, failing, min_stocks,
 #'   stock_prep, addition_order, picklist.
 build_plate <- function(design_csv, stocks_csv, settings = list(), orientation = "auto",
@@ -50,6 +51,7 @@ build_plate <- function(design_csv, stocks_csv, settings = list(), orientation =
     design = design,
     design_matrix = dmat,
     stocks = stocks,
+    stock_table = stocks_in,
     problems = problems,
     layout = layout,
     concentrations = cv,
