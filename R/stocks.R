@@ -4,14 +4,14 @@
 # component must all be in the same units.
 
 STOCK_COLUMNS <- c("component", "role", "units", "stock_conc", "final_conc",
-                   "working_stock_conc", "max_stock_conc")
+                   "working_stock_conc", "max_stock_conc", "notes")
 STOCK_NUMERIC <- c("stock_conc", "final_conc", "working_stock_conc", "max_stock_conc")
 
 #' Bring a stock data frame to the standard columns and types.
 normalise_stocks <- function(stocks) {
   stocks <- as.data.frame(stocks, stringsAsFactors = FALSE)
   names(stocks) <- tolower(trimws(names(stocks)))
-  for (col in setdiff(STOCK_COLUMNS, names(stocks))) stocks[[col]] <- NA
+  for (col in setdiff(STOCK_COLUMNS, names(stocks))) stocks[[col]] <- rep(NA, nrow(stocks))
   stocks <- stocks[, STOCK_COLUMNS]
   stocks$component <- trimws(as.character(stocks$component))
   stocks$component[is.na(stocks$component)] <- ""
@@ -19,6 +19,8 @@ normalise_stocks <- function(stocks) {
   stocks$role[is.na(stocks$role) | stocks$role == ""] <- "factor"
   stocks$units <- trimws(as.character(stocks$units))
   stocks$units[is.na(stocks$units)] <- ""
+  stocks$notes <- trimws(as.character(stocks$notes))
+  stocks$notes[is.na(stocks$notes)] <- ""
   for (col in STOCK_NUMERIC) stocks[[col]] <- parse_num(stocks[[col]])
   stocks <- stocks[stocks$component != "", , drop = FALSE]
   rownames(stocks) <- NULL

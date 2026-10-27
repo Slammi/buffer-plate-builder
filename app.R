@@ -1,10 +1,12 @@
 # Buffer Plate Builder: DoE design + stocks -> per-well pipetting volumes.
 # Run with shiny::runApp() from this folder. Core logic lives in R/ (sourced
 # automatically by Shiny) and is tested in tests/.
+#
+# The Inputs page mirrors the Inputs tab of the ASR4 Excel calculator: yellow
+# cells with blue text are inputs, everything else is calculated.
 
 library(shiny)
 library(bslib)
-library(rhandsontable)
 library(DT)
 library(ggplot2)
 
@@ -14,6 +16,48 @@ if (!exists("build_plate")) {
 
 EXAMPLE_DESIGN <- file.path("tests", "fixtures", "ASR4_design_PEG24.csv")
 EXAMPLE_STOCKS <- file.path("tests", "fixtures", "ASR4_stocks.csv")
+
+XL_CSS <- "
+.xl-title { font-size: 1.35rem; font-weight: 700; margin: 0; }
+.xl-sub { color: #595959; font-style: italic; font-size: .9rem; margin-bottom: 1rem; }
+.xl-section { font-size: 1.05rem; font-weight: 700; margin: 1.2rem 0 .4rem; }
+table.xl { border-collapse: collapse; font-size: .85rem; margin-bottom: .5rem;
+  width: auto !important; align-self: flex-start; }
+.xl-wrap { align-self: flex-start; max-width: 100%; overflow-x: auto; }
+table.xl th, table.xl td { border: 1px solid #BFBFBF; padding: 2px 6px; vertical-align: middle; }
+table.xl th { background: #D9E1F2; font-weight: 700; white-space: normal; text-align: left; max-width: 9rem; }
+table.xl td.name { font-weight: 700; white-space: nowrap; }
+table.xl td.calc { text-align: right; white-space: nowrap; }
+table.xl td.check { white-space: nowrap; }
+table.xl td.in { background: #FFFF99; padding: 0; }
+table.xl td.ok { background: #C6EFCE; }
+table.xl td.warn { background: #FFE699; }
+table.xl td.bad { background: #FFC7CE; }
+table.xl-set td { border: none; padding: 2px 8px 2px 0; }
+table.xl-set td.in { border: 1px solid #BFBFBF; }
+table.xl .form-group { margin: 0; width: auto !important; }
+table.xl input.form-control { background: #FFFF99; color: #0000FF; border: none; border-radius: 0;
+  padding: 1px 4px; height: auto; min-height: 0; font-size: .85rem; box-shadow: none; }
+table.xl input.num { width: 6.5rem; text-align: right; }
+table.xl input.txt { width: 6rem; }
+table.xl input.wide { width: 12rem; }
+"
+
+# Pushes calculated cell values into the Inputs tables without re-rendering
+# (and so without stealing focus from) the input cells.
+XL_JS <- "
+var xlLast = [];
+function xlApply() {
+  xlLast.forEach(function(c) {
+    var el = document.getElementById(c.id);
+    if (el) { el.textContent = c.text; el.className = c.cls; }
+  });
+}
+Shiny.addCustomMessageHandler('calc-cells', function(cells) { xlLast = cells; xlApply(); });
+$(document).on('shiny:value', function(e) {
+  if (e.name === 'factor_table' || e.name === 'constant_table') setTimeout(xlApply, 0);
+});
+"
 
 # Round numeric columns for display.
 round_df <- function(df, digits = 2) {
@@ -31,25 +75,53 @@ dt <- function(df, pct = NULL, digits = 2, page = 25, ...) {
   if (length(pct)) out <- formatPercentage(out, intersect(pct, names(df)), 1)
   if ("status" %in% names(df)) {
     out <- formatStyle(out, "status", backgroundColor = styleEqual(
-      c("OK", "OVER VOLUME", "BELOW MIN"), c("#d9f2d9", "#f8d0d0", "#fde5c0")))
+      c("OK", "OVER VOLUME", "BELOW MIN"), c("#C6EFCE", "#FFC7CE", "#FFE699")))
   }
   out
 }
 
+# Number formatting for calculated cells.
+fmt_g <- function(x) ifelse(is.na(x) | !is.finite(x), "", format(signif(x, 6), trim = TRUE, drop0trailing = TRUE))
+fmt_vol <- function(x) ifelse(is.na(x) | !is.finite(x), "", sprintf("%.3f", x))
+fmt_pct <- function(x) ifelse(is.na(x) | !is.finite(x), "", sprintf("%.1f%%", 100 * x))
+
+# A yellow input cell.
+in_num <- function(id, value) {
+  tags$td(class = "in", tagAppendAttributes(
+    numericInput(id, NULL, if (is.finite(value)) value else NA),
+    .cssSelector = "input", class = "num"))
+}
+in_txt <- function(id, value, cls = "txt") {
+  tags$td(class = "in", tagAppendAttributes(
+    textInput(id, NULL, value), .cssSelector = "input", class = cls))
+}
+calc_td <- function(id, cls = "calc") tags$td(id = id, class = cls)
+
+setting_row <- function(id, label, value, step = NA) {
+  tags$tr(tags$td(label),
+          tags$td(class = "in", tagAppendAttributes(
+            numericInput(id, NULL, value, step = step),
+            .cssSelector = "input", class = "num")))
+}
+
 ui <- page_sidebar(
   title = "Buffer Plate Builder",
-  theme = bs_theme(version = 5, bootswatch = "flatly"),
+  # Let the page scroll instead of squeezing the cards into the window height
+  # (a fillable page collapsed the optimiser table to 0 px in small windows).
+  fillable = FALSE,
+  theme = bs_theme(version = 5, base_font = c("Calibri", "Segoe UI", "Arial", "sans-serif")),
+  tags$head(tags$style(HTML(XL_CSS)), tags$script(HTML(XL_JS))),
   sidebar = sidebar(
-    width = 330,
+    width = 320,
     accordion(
-      open = c("Design", "Settings"),
+      open = "Design",
       accordion_panel(
         "Design",
         fileInput("design_file", "Design CSV", accept = ".csv"),
         actionButton("load_example", "Load ASR4 example", class = "btn-sm btn-outline-secondary mb-2"),
         radioButtons("orientation", "Orientation",
                      c("Auto-detect" = "auto", "Runs in rows" = "runs_in_rows",
-                       "Runs in columns" = "runs_in_columns"), inline = FALSE),
+                       "Runs in columns" = "runs_in_columns")),
         uiOutput("design_info"),
         selectizeInput("components", "Columns that are components", choices = NULL,
                        multiple = TRUE, options = list(plugins = list("remove_button")))
@@ -58,15 +130,6 @@ ui <- page_sidebar(
         "Stocks file",
         fileInput("stocks_file", "Load stock CSV", accept = ".csv"),
         downloadButton("dl_stocks", "Save stock CSV", class = "btn-sm")
-      ),
-      accordion_panel(
-        "Settings",
-        numericInput("final_volume", "Final well volume (µL)", 100, min = 1),
-        numericInput("fixed_volume", "Fixed volume per well (µL)", 0, min = 0),
-        helpText("Enzyme / template / master mix, anything common not in the stock table."),
-        numericInput("min_volume", "Minimum pipettable volume (µL)", 0.5, min = 0, step = 0.1),
-        numericInput("overage", "Stock overage (fraction)", 0.15, min = 0, step = 0.05),
-        numericInput("dead_volume", "Dead volume per reservoir (µL)", 20, min = 0)
       ),
       accordion_panel(
         "Plate layout",
@@ -84,22 +147,30 @@ ui <- page_sidebar(
   navset_card_tab(
     id = "tabs",
     nav_panel(
-      "Stocks",
-      div(class = "alert alert-warning py-2",
-          strong("Units are not converted."),
-          " Each stock (and final_conc for constants) must be in the same units as the design values for that component."),
-      layout_columns(
-        col_widths = c(7, 5),
-        card(card_header("Stock table (edit live; right-click to add/remove rows)"),
-             rHandsontableOutput("stocks_hot"),
-             div(class = "mt-2", actionButton("add_constant", "Add constant component", class = "btn-sm"))),
-        card(card_header("Per-component check"), DTOutput("component_check"))
+      "Inputs",
+      div(class = "xl-title", textOutput("page_title", inline = TRUE)),
+      div(class = "xl-sub",
+          "Yellow cells with blue text are inputs - edit these. Everything else is calculated. ",
+          "Units are not converted: each stock must be in the same units as the design."),
+      tags$table(
+        class = "xl xl-set",
+        setting_row("final_volume", "Final reaction volume per well (µL)", 100),
+        setting_row("fixed_volume", "Fixed volume per well: enzyme / template / master mix etc. (µL)", 0),
+        setting_row("min_volume", "Minimum pipettable volume (µL)", 0.5, step = 0.1),
+        setting_row("overage", "Stock overage (fraction, 0.15 = 15%)", 0.15, step = 0.05),
+        setting_row("dead_volume", "Dead volume per source reservoir (µL)", 20)
       ),
-      uiOutput("stock_problems")
+      div(class = "xl-section", "Design factors"),
+      div(class = "xl-wrap", uiOutput("factor_table")),
+      div(class = "xl-section", "Constant components (same concentration in every well)"),
+      div(class = "xl-wrap", uiOutput("constant_table")),
+      div(class = "small text-muted mb-1", "To remove a constant, clear its name."),
+      div(actionButton("add_constant", "Add constant component", class = "btn-sm btn-outline-secondary")),
+      div(class = "xl-section", "Feasibility summary"),
+      div(class = "xl-wrap", uiOutput("feasibility_summary"))
     ),
     nav_panel(
-      "Feasibility",
-      uiOutput("value_boxes"),
+      "Diagnostics",
       card(card_header("Feasibility rule"), uiOutput("rule")),
       layout_columns(
         col_widths = c(6, 6),
@@ -107,14 +178,14 @@ ui <- page_sidebar(
         card(card_header("Minimum stock per component (others held fixed)"), DTOutput("min_stocks"))
       ),
       card(
-        card_header("Optimiser: stocks within max_stock_conc that make every well fit"),
+        card_header("Optimiser: stocks within max stock that make every well fit"),
         p(class = "text-muted small",
-          "Stocks are only made more concentrated, never above max_stock_conc (no max = unlimited), ",
+          "Stocks are only made more concentrated, never above the max stock (no max = unlimited), ",
           "changing as little as possible. Working stocks are ignored."),
-        selectizeInput("hold", "Keep these stocks unchanged", choices = NULL, multiple = TRUE),
+        uiOutput("hold_ui"),
         actionButton("optimise", "Run optimiser", class = "btn-sm btn-primary"),
         uiOutput("opt_message"),
-        DTOutput("opt_table"),
+        uiOutput("opt_table_ui"),
         uiOutput("opt_apply")
       )
     ),
@@ -150,13 +221,41 @@ ui <- page_sidebar(
 
 server <- function(input, output, session) {
   design_source <- reactiveVal(NULL)
-  stocks_seed <- reactiveVal(NULL)   # what the stock grid is (re)rendered from
+  design_name <- reactiveVal(NULL)
   optimised <- reactiveVal(NULL)
 
-  observeEvent(input$design_file, design_source(input$design_file$datapath))
+  # ---- Stock state
+  # stock_state holds the current stock table. The Inputs tables are rebuilt
+  # from it only when reseed() is called (new design, file load, add row,
+  # optimiser); ordinary edits flow back from the input cells. Input ids carry
+  # a version number so stale values from an earlier table are never read.
+  stock_state <- reactiveVal(normalise_stocks(data.frame(component = character())))
+  skeleton <- reactiveVal(list(version = 0, factors = character(), n_const = 0))
+  reseed <- function(df) {
+    df <- normalise_stocks(df)
+    stock_state(df)
+    old <- isolate(skeleton())
+    skeleton(list(version = old$version + 1,
+                  factors = df$component[df$role == "factor"],
+                  n_const = sum(df$role == "constant")))
+  }
+  cell_id <- function(kind, field, i, v = skeleton()$version) sprintf("%s_%s_%d_%d", kind, field, v, i)
+  stocks <- reactive(stock_state())
+
+  observeEvent(input$design_file, {
+    design_source(input$design_file$datapath)
+    design_name(input$design_file$name)
+  })
   observeEvent(input$load_example, {
     design_source(EXAMPLE_DESIGN)
-    stocks_seed(read_stocks(EXAMPLE_STOCKS))
+    design_name(basename(EXAMPLE_DESIGN))
+    reseed(read_stocks(EXAMPLE_STOCKS))
+  })
+
+  output$page_title <- renderText({
+    nm <- design_name()
+    paste0(if (is.null(nm)) "Buffer screen" else paste(tools::file_path_sans_ext(nm), "buffer screen"),
+           " - volume calculator")
   })
 
   design <- reactive({
@@ -191,36 +290,106 @@ server <- function(input, output, session) {
     intersect(input$components, d$columns)
   })
 
-  # Current stock table: the latest seed, then every edit made in the grid.
-  current_stocks <- reactiveVal(NULL)
-  observeEvent(stocks_seed(), current_stocks(stocks_seed()))
-  observeEvent(input$stocks_hot, current_stocks(normalise_stocks(hot_to_r(input$stocks_hot))))
-  stocks <- reactive(req(current_stocks()))
+  dmat <- reactive(tryCatch(design_matrix(design(), components()), error = function(e) NULL))
 
-  # Re-seed the grid when the component set changes, keeping matching rows.
+  # One factor row per design component, keeping stocks already entered.
   observeEvent(components(), {
-    existing <- isolate(current_stocks())
-    seeded <- default_stocks(components(), existing)
-    if (is.null(existing) || !identical(seeded$component, existing$component)) stocks_seed(seeded)
+    seeded <- default_stocks(components(), stock_state())
+    if (!identical(seeded$component[seeded$role == "factor"], isolate(skeleton())$factors)) reseed(seeded)
   })
 
   observeEvent(input$stocks_file, {
     loaded <- read_stocks(input$stocks_file$datapath)
-    stocks_seed(if (is.null(design_source())) loaded else default_stocks(isolate(components()), loaded))
+    comps <- tryCatch(isolate(components()), error = function(e) NULL)
+    reseed(if (is.null(comps)) loaded else default_stocks(comps, loaded))
   })
 
   observeEvent(input$add_constant, {
-    s <- stocks()
-    new <- normalise_stocks(data.frame(component = paste0("Constant", nrow(s) + 1), role = "constant"))
-    stocks_seed(rbind(s, new))
+    s <- stock_state()
+    reseed(rbind(s, normalise_stocks(data.frame(component = "New constant", role = "constant"))))
   })
 
-  output$stocks_hot <- renderRHandsontable({
-    s <- req(stocks_seed())
-    rhandsontable(s, rowHeaders = NULL, stretchH = "all", height = max(200, 32 * nrow(s) + 40)) |>
-      hot_col("role", type = "dropdown", source = c("factor", "constant"), strict = TRUE) |>
-      hot_col(c("stock_conc", "final_conc", "working_stock_conc", "max_stock_conc"), format = "0.[0000]") |>
-      hot_context_menu(allowRowEdit = TRUE, allowColEdit = FALSE)
+  # ---- Inputs tables (structure only; values are pushed by the observer below)
+  output$factor_table <- renderUI({
+    sk <- skeleton()
+    st <- isolate(stock_state())
+    fac <- st[st$role == "factor", , drop = FALSE]
+    if (!nrow(fac)) return(div(class = "text-muted", "Load a design CSV (sidebar) to list its factors here."))
+    v <- sk$version
+    head <- c("Component", "Units (as in design)", "Stock conc. (same units as design)", "Design min",
+              "Design max", "Vol. at design max (µL)", "Fraction of well at max",
+              "Smallest non-zero level", "Vol. at smallest level (µL)", "Pipetting check",
+              "Working stock (optional)", "Max stock (optional)", "Stock notes")
+    rows <- lapply(seq_len(nrow(fac)), function(i) {
+      calc <- function(col, cls = "calc") calc_td(cell_id("fc", col, i, v), cls)
+      tags$tr(
+        tags$td(class = "name", fac$component[i]),
+        in_txt(cell_id("f", "units", i, v), fac$units[i]),
+        in_num(cell_id("f", "stock", i, v), fac$stock_conc[i]),
+        calc("min"), calc("max"), calc("volmax"), calc("fracmax"),
+        calc("small"), calc("volsmall"), calc("check", "check"),
+        in_num(cell_id("f", "work", i, v), fac$working_stock_conc[i]),
+        in_num(cell_id("f", "maxst", i, v), fac$max_stock_conc[i]),
+        in_txt(cell_id("f", "notes", i, v), fac$notes[i], "wide")
+      )
+    })
+    tags$table(class = "xl", tags$thead(tags$tr(lapply(head, tags$th))), tags$tbody(rows))
+  })
+
+  output$constant_table <- renderUI({
+    sk <- skeleton()
+    st <- isolate(stock_state())
+    cst <- st[st$role == "constant", , drop = FALSE]
+    v <- sk$version
+    head <- c("Component", "Units", "Stock conc.", "Final conc. in well", "Vol. per well (µL)",
+              "Fraction of well", "Pipetting check", "Stock notes")
+    rows <- lapply(seq_len(nrow(cst)), function(i) {
+      tags$tr(
+        in_txt(cell_id("c", "name", i, v), cst$component[i], "wide"),
+        in_txt(cell_id("c", "units", i, v), cst$units[i]),
+        in_num(cell_id("c", "stock", i, v), cst$stock_conc[i]),
+        in_num(cell_id("c", "final", i, v), cst$final_conc[i]),
+        calc_td(cell_id("cc", "vol", i, v)), calc_td(cell_id("cc", "frac", i, v)),
+        calc_td(cell_id("cc", "check", i, v), "check"),
+        in_txt(cell_id("c", "notes", i, v), cst$notes[i], "wide")
+      )
+    })
+    if (!length(rows)) rows <- list(tags$tr(tags$td(colspan = length(head), class = "text-muted", "None")))
+    tags$table(class = "xl", tags$thead(tags$tr(lapply(head, tags$th))), tags$tbody(rows))
+  })
+
+  # Read the input cells back into stock_state.
+  observe({
+    sk <- skeleton()
+    st <- isolate(stock_state())
+    fac <- st[st$role == "factor", , drop = FALSE]
+    get <- function(kind, field, i) input[[cell_id(kind, field, i, sk$version)]]
+    num <- function(x) if (is.null(x) || length(x) == 0) NA_real_ else as.numeric(x)
+
+    ids <- c(unlist(lapply(seq_along(sk$factors), function(i)
+      c(cell_id("f", "units", i, sk$version), cell_id("f", "stock", i, sk$version)))),
+      unlist(lapply(seq_len(sk$n_const), function(i) cell_id("c", "name", i, sk$version))))
+    # Wait until every cell of this version has reported a value.
+    if (any(vapply(ids, function(id) is.null(input[[id]]), logical(1)))) return()
+
+    if (nrow(fac)) {
+      for (i in seq_len(nrow(fac))) {
+        fac$units[i] <- get("f", "units", i) %||% ""
+        fac$stock_conc[i] <- num(get("f", "stock", i))
+        fac$working_stock_conc[i] <- num(get("f", "work", i))
+        fac$max_stock_conc[i] <- num(get("f", "maxst", i))
+        fac$notes[i] <- get("f", "notes", i) %||% ""
+      }
+    }
+    cst <- if (sk$n_const) {
+      do.call(rbind, lapply(seq_len(sk$n_const), function(i) data.frame(
+        component = get("c", "name", i) %||% "", role = "constant",
+        units = get("c", "units", i) %||% "", stock_conc = num(get("c", "stock", i)),
+        final_conc = num(get("c", "final", i)), notes = get("c", "notes", i) %||% "",
+        stringsAsFactors = FALSE)))
+    } else NULL
+    new <- normalise_stocks(rbind(normalise_stocks(fac), if (!is.null(cst)) normalise_stocks(cst)))
+    if (!identical(new, isolate(stock_state()))) stock_state(new)
   })
 
   settings <- reactive({
@@ -232,6 +401,43 @@ server <- function(input, output, session) {
       reserved_wells = input$reserved_wells %||% "", randomize = input$randomize,
       seed = input$seed %||% 1, replicates = max(1L, as.integer(input$replicates %||% 1))
     )
+  })
+  safe_settings <- reactive(tryCatch(resolve_settings(settings()), error = function(e) NULL))
+
+  # Push the calculated cells.
+  observe({
+    sk <- skeleton()
+    s <- req(safe_settings())
+    st <- stocks()
+    v <- sk$version
+    cells <- list()
+    add <- function(id, text, cls = "calc") cells[[length(cells) + 1]] <<- list(id = id, text = text, cls = cls)
+
+    dm <- dmat()
+    if (!is.null(dm) && length(sk$factors) && all(sk$factors %in% names(dm))) {
+      fc <- factor_checks(dm[, c("run", sk$factors)], st, s)
+      for (i in seq_len(nrow(fc))) {
+        add(cell_id("fc", "min", i, v), fmt_g(fc$design_min[i]))
+        add(cell_id("fc", "max", i, v), fmt_g(fc$design_max[i]))
+        add(cell_id("fc", "volmax", i, v), fmt_vol(fc$vol_at_max[i]))
+        add(cell_id("fc", "fracmax", i, v), fmt_pct(fc$fraction_at_max[i]))
+        add(cell_id("fc", "small", i, v), fmt_g(fc$smallest_level[i]))
+        add(cell_id("fc", "volsmall", i, v), fmt_vol(fc$vol_at_smallest[i]))
+        add(cell_id("fc", "check", i, v), fc$check[i], paste("check", fc$status[i]))
+      }
+    }
+    for (i in seq_len(sk$n_const)) {
+      row <- data.frame(component = "x", role = "constant",
+                        stock_conc = input[[cell_id("c", "stock", i, v)]] %||% NA,
+                        final_conc = input[[cell_id("c", "final", i, v)]] %||% NA)
+      blank <- !nzchar(trimws(input[[cell_id("c", "name", i, v)]] %||% ""))
+      cc <- constant_checks(row, s)
+      add(cell_id("cc", "vol", i, v), if (blank) "" else fmt_vol(cc$vol_per_well))
+      add(cell_id("cc", "frac", i, v), if (blank) "" else fmt_pct(cc$fraction_of_well))
+      add(cell_id("cc", "check", i, v), if (blank) "(removed)" else cc$check,
+          if (blank) "check" else paste("check", cc$status))
+    }
+    session$sendCustomMessage("calc-cells", cells)
   })
 
   result <- reactive({
@@ -247,63 +453,40 @@ server <- function(input, output, session) {
     r
   })
 
-  # ---- Stocks tab
-  output$component_check <- renderDT({
-    s <- stocks()
-    probs <- validate_stocks(s, components())
-    r <- result()
-    tab <- data.frame(component = s$component, role = s$role, stringsAsFactors = FALSE)
-    if (!inherits(r, "build_error")) {
-      cv <- r$concentrations
-      max_share <- tapply(cv$volume, cv$component, max) / r$settings$final_volume
-      ms <- r$min_stocks
-      i <- match(tolower(tab$component), tolower(ms$component))
-      tab$max_share <- unname(max_share[ms$component[i]])
-      tab$min_stock <- ms$min_stock_needed[i]
-      tab$check <- ifelse(is.na(i), "",
-                   ifelse(ms$exceeds_max[i], "min stock > max",
-                   ifelse(ms$fits_now[i] | is.na(ms$min_stock_needed[i]), "OK",
-                   ifelse(is.infinite(ms$min_stock_needed[i]), "can't fix alone", "stock too dilute"))))
-    }
-    tab$problem <- vapply(tolower(tab$component), function(cmp) {
-      paste(probs$problem[tolower(probs$component) == cmp], collapse = "; ")
-    }, character(1))
-    out <- datatable(round_df(tab, 4), rownames = FALSE,
-                     colnames = c("component", "role", if (!inherits(r, "build_error"))
-                       c("max % of well", "min stock", "check"), "problem"),
-                     options = list(dom = "t", pageLength = 100, ordering = FALSE))
-    if ("max_share" %in% names(tab)) {
-      out <- formatPercentage(out, "max_share", 1) |>
-        formatSignif("min_stock", 4) |>
-        formatStyle("check", color = styleEqual(c("OK"), c("green"), default = "firebrick"))
-    }
-    out
-  })
-
-  output$stock_problems <- renderUI({
-    r <- result()
-    if (inherits(r, "build_error")) div(class = "alert alert-danger", style = "white-space: pre-wrap", r$error)
-  })
-
-  # ---- Feasibility tab
-  output$value_boxes <- renderUI({
-    sm <- res()$summary
-    layout_column_wrap(
-      width = "170px", fill = FALSE, heights_equal = "row",
-      value_box("OK wells", sm$ok, theme = "success"),
-      value_box("OVER VOLUME", sm$over_volume, theme = if (sm$over_volume) "danger" else "secondary"),
-      value_box("BELOW MIN", sm$below_min, theme = if (sm$below_min) "warning" else "secondary"),
-      value_box("Worst well, used before water", sprintf("%.1f%%", 100 * sm$worst_fraction),
-                p(sprintf("Run %d", sm$worst_run)),
-                theme = if (sm$worst_fraction > 1) "danger" else "primary"),
-      value_box("Headroom in most crowded well",
-                sprintf("%.1f µL", sm$headroom_uL),
-                p(sprintf("%.1f%% of the well; %d well(s) on %d plate(s)",
-                          100 * sm$headroom_fraction, sm$wells, sm$plates)),
-                theme = if (sm$headroom_uL < 0) "danger" else "info")
+  output$feasibility_summary <- renderUI({
+    r <- tryCatch(result(), error = function(e) NULL)
+    ok <- !is.null(r) && !inherits(r, "build_error")
+    s <- safe_settings()
+    sum_max <- if (ok) {
+      fc <- factor_checks(r$design_matrix, r$stocks, s)
+      sum_fraction_at_max(fc, constant_checks(r$stocks, s), s)
+    } else NA
+    runs <- if (ok) r$runs else NULL
+    val <- function(x, cls = "", fmt = fmt_g) tags$td(class = paste("calc", cls), style = "font-weight:700",
+                                                      if (ok) fmt(x) else "-")
+    n_over <- if (ok) sum(runs$status == "OVER VOLUME") else NA
+    n_below <- if (ok) sum(runs$status == "BELOW MIN") else NA
+    worst <- if (ok) r$summary$worst_fraction else NA
+    tagList(
+      tags$table(
+        class = "xl xl-set",
+        tags$tr(tags$td("Runs in design"), val(if (ok) nrow(runs) else NA)),
+        tags$tr(tags$td("Runs that do NOT fit (water < 0)"), val(n_over, if (isTRUE(n_over > 0)) "bad")),
+        tags$tr(tags$td("Runs with a volume below min pipettable"), val(n_below, if (isTRUE(n_below > 0)) "warn")),
+        tags$tr(tags$td("Runs OK"), val(if (ok) sum(runs$status == "OK") else NA)),
+        tags$tr(tags$td("Worst-case well: fraction of volume used before water"),
+                val(worst, if (isTRUE(worst > 1)) "bad", fmt_pct)),
+        tags$tr(tags$td("Sum of all factor fractions at max (+ constant + fixed vol.)"),
+                val(sum_max, if (isTRUE(sum_max > 1)) "bad", fmt_pct))
+      ),
+      if (!is.null(r) && inherits(r, "build_error"))
+        div(class = "alert alert-danger py-2 mt-2", style = "white-space: pre-wrap", r$error),
+      if (ok && r$settings$replicates > 1)
+        div(class = "small text-muted", sprintf("Counts are per run; each run is in %d wells.", r$settings$replicates))
     )
   })
 
+  # ---- Diagnostics tab
   output$rule <- renderUI({
     r <- res()
     s <- r$settings
@@ -311,14 +494,14 @@ server <- function(input, output, session) {
       p("A well fits only if", tags$code("Σ (C_i / Stock_i) + fixed / V_total ≤ 1"), "."),
       p("V_total cancels out: changing the final well volume never makes a well fit. ",
         "Only more concentrated stocks, a smaller fixed volume or narrower design ranges help."),
-      p(sprintf("Here: fixed / V_total = %.1f%%; worst well Σ = %.1f%%.",
-                100 * s$fixed_volume / s$final_volume, 100 * r$summary$worst_fraction))
+      p(sprintf("Here: fixed / V_total = %.1f%%; worst well Σ = %.1f%% (run %d); headroom %.1f µL.",
+                100 * s$fixed_volume / s$final_volume, 100 * r$summary$worst_fraction,
+                r$summary$worst_run, r$summary$headroom_uL))
     )
   })
 
   output$failing <- renderDT({
-    f <- res()$failing
-    dt(f, pct = c("fraction_used", "largest_share"), page = 10)
+    dt(res()$failing, pct = c("fraction_used", "largest_share"), page = 10)
   })
 
   output$min_stocks <- renderDT({
@@ -330,9 +513,17 @@ server <- function(input, output, session) {
       formatStyle("fits_now", color = styleEqual(c(TRUE, FALSE), c("green", "firebrick")))
   })
 
+  # The hold list is rendered (not updated) from the component names, so it is
+  # never left empty by an update that reaches the browser before the input
+  # is ready. It re-renders only when the names change, not on every edit.
+  component_names <- reactiveVal(character())
   observeEvent(stocks(), {
-    updateSelectizeInput(session, "hold", choices = stocks()$component,
-                         selected = intersect(isolate(input$hold), stocks()$component))
+    if (!identical(stocks()$component, component_names())) component_names(stocks()$component)
+  })
+  output$hold_ui <- renderUI({
+    nm <- component_names()
+    selectizeInput("hold", "Keep these stocks unchanged", choices = nm, multiple = TRUE,
+                   selected = intersect(isolate(input$hold), nm))
   })
   observeEvent(list(stocks(), settings(), components()), optimised(NULL), ignoreInit = TRUE)
   observeEvent(input$optimise, {
@@ -343,6 +534,8 @@ server <- function(input, output, session) {
     o <- req(optimised())
     div(class = paste("alert mt-2", if (o$feasible) "alert-success" else "alert-danger"), o$message)
   })
+  # Only take up space when there is a feasible suggestion to show.
+  output$opt_table_ui <- renderUI(if (isTRUE(optimised()$feasible)) DTOutput("opt_table"))
   output$opt_table <- renderDT({
     o <- req(optimised())
     req(o$feasible)
@@ -352,14 +545,21 @@ server <- function(input, output, session) {
   })
   output$opt_apply <- renderUI({
     o <- req(optimised())
-    if (isTRUE(o$feasible)) actionButton("apply_opt", "Apply rounded stocks to the stock table", class = "btn-sm mt-2")
+    if (isTRUE(o$feasible)) actionButton("apply_opt", "Apply rounded stocks to the Inputs page", class = "btn-sm mt-2")
   })
   observeEvent(input$apply_opt, {
     o <- req(optimised())
+    req(isTRUE(o$feasible))
+    new <- o$stocks$suggested_rounded
+    if (any(!is.finite(new) | new <= 0)) {
+      showNotification("Not applied: the suggestion contains a stock that is not a finite positive number.",
+                       type = "error")
+      return()
+    }
     s <- stocks()
     i <- match(tolower(s$component), tolower(o$stocks$component))
-    s$stock_conc[!is.na(i)] <- o$stocks$suggested_rounded[i[!is.na(i)]]
-    stocks_seed(s)
+    s$stock_conc[!is.na(i)] <- new[i[!is.na(i)]]
+    reseed(s)
     optimised(NULL)
   })
 

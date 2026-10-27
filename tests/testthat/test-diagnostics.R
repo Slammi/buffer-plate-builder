@@ -60,6 +60,37 @@ test_that("optimiser reports infeasible designs", {
   expect_match(o$message, "No set of stocks")
 })
 
+test_that("a held stock that fills whole wells is infeasible, not infinite stocks", {
+  # PEG stock 30% with a 30% design maximum: PEG alone takes 100% of those wells.
+  stocks <- data.frame(component = c("MgCl2", "Kcl", "PEG8000", "Betaine", "Trehalose", "TCEP",
+                                     "CaCl2", "Tween20", "Tris-HCl"),
+                       role = c(rep("factor", 8), "constant"),
+                       stock_conc = c(1000, 1000, 30, 1000, 40, 1000, 1000, 10, 1000),
+                       final_conc = c(rep(NA, 8), 38))
+  r <- build_plate(fixture("ASR4_design_PEG30_transposed.csv"), stocks, settings = list(min_volume = 0.2))
+  o <- optimise_stocks(r, hold = "PEG8000")
+  expect_false(o$feasible)
+  expect_match(o$message, "PEG8000 is held at 30")
+  expect_match(o$message, "100% of the well")
+  expect_setequal(o$infinite_components, setdiff(stocks$component, "PEG8000"))
+  expect_true(all(is.na(o$stocks$suggested_rounded)))
+
+  # Without the hold, raising the PEG stock is a real solution.
+  free <- optimise_stocks(r)
+  expect_true(free$feasible)
+  expect_true(all(is.finite(free$stocks$suggested_rounded)))
+  expect_gt(free$stocks$suggested_rounded[free$stocks$component == "PEG8000"], 30)
+})
+
+test_that("a stock at its max that fills whole wells is explained", {
+  stocks <- read_stocks(fixture("ASR4_stocks.csv"))
+  stocks$stock_conc[stocks$component == "PEG8000"] <- 24
+  stocks$max_stock_conc[stocks$component == "PEG8000"] <- 24
+  o <- optimise_stocks(asr4(stocks))
+  expect_false(o$feasible)
+  expect_match(o$message, "PEG8000 is at its max stock")
+})
+
 test_that("held components are not changed by the optimiser", {
   o <- optimise_stocks(asr4(), hold = "PEG8000")
   expect_true(o$feasible)

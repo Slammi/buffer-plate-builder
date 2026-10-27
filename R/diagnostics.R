@@ -81,6 +81,45 @@ min_stocks <- function(cv, stocks, settings) {
   do.call(rbind, rows)
 }
 
+# Explain why only infinite stocks would fit. Usually the components whose
+# stock cannot change (held, or already at their max) plus the fixed volume
+# fill whole wells on their own.
+infinite_stock_message <- function(C, stocks, held, infinite, settings) {
+  V <- settings$final_volume
+  fixed_share <- settings$fixed_volume / V
+  at_max <- !is.na(stocks$max_stock_conc) & stocks$stock_conc >= stocks$max_stock_conc
+  fixed_stock <- held | at_max
+  share <- sweep(C, 2, stocks$stock_conc, "/")
+  locked <- rowSums(share[, fixed_stock, drop = FALSE]) + fixed_share
+  others <- rowSums(share[, infinite, drop = FALSE]) > 0
+  full <- which(locked >= 1 - 1e-9 & others)
+  inf_names <- paste(stocks$component[infinite], collapse = ", ")
+
+  if (length(full)) {
+    r <- full[which.max(locked[full])]
+    j <- which(fixed_stock)[which.max(share[r, fixed_stock])]
+    cmp <- stocks$component[j]
+    why <- if (held[j]) "held" else "at its max stock"
+    advice <- if (held[j]) {
+      sprintf("Stop holding %s so its stock can be raised, or lower its maximum level in the design.", cmp)
+    } else {
+      sprintf("Raise the max stock for %s if a more concentrated stock can be made, or lower its maximum level in the design.", cmp)
+    }
+    sprintf(paste0(
+      "Not feasible: %s is %s at %s, and in %d run(s) it%s uses %.0f%% of the well ",
+      "(e.g. run %d: level %s / stock %s), leaving no room for %s. ",
+      "Only infinitely concentrated stocks of those would fit. %s"),
+      cmp, why, format(stocks$stock_conc[j]), length(full),
+      if (sum(fixed_stock) > 1 || fixed_share > 0) " (with the other unchangeable volumes)" else " alone",
+      100 * locked[r], r, format(C[r, j]), format(stocks$stock_conc[j]), inf_names, advice)
+  } else {
+    sprintf(paste0(
+      "Not feasible: every well would fit only if %s had infinitely concentrated stocks. ",
+      "Set a realistic max stock for them, or narrow the design ranges or reduce the fixed volume."),
+      inf_names)
+  }
+}
+
 # Round up to `digits` significant figures (keeps a feasible stock feasible).
 signif_up <- function(x, digits = 2) {
   out <- x
@@ -99,7 +138,9 @@ signif_up <- function(x, digits = 2) {
 #'             1/max_i <= x_i <= 1/Stock_now_i
 #'
 #' Working stocks are ignored (main stocks only). `hold` names components
-#' whose stock must not change.
+#' whose stock must not change. A solution that needs an infinitely
+#' concentrated stock (x_i = 0, possible when no max is set) is reported as
+#' not feasible, with the reason.
 optimise_stocks <- function(result, hold = character()) {
   if (!requireNamespace("lpSolve", quietly = TRUE)) stop("Package lpSolve is needed for the optimiser.")
   stocks <- result$stocks
@@ -128,6 +169,24 @@ optimise_stocks <- function(result, hold = character()) {
 
   feasible <- sol$status == 0
   x <- if (feasible) sol$solution else rep(NA_real_, n)
+
+  # Without a max stock the LP may drive x_i to 0, i.e. an infinitely
+  # concentrated stock that uses no volume. That is not a real solution.
+  infinite <- if (feasible) colSums(C) > 0 & x <= upper * 1e-9 else rep(FALSE, n)
+  if (any(infinite)) {
+    return(list(
+      feasible = FALSE,
+      message = infinite_stock_message(C, stocks, held, infinite, s),
+      worst_fraction = NA_real_,
+      infinite_components = comps[infinite],
+      stocks = data.frame(
+        component = comps, units = stocks$units, stock_conc = stocks$stock_conc,
+        max_stock_conc = stocks$max_stock_conc, suggested_stock = NA_real_,
+        suggested_rounded = NA_real_, changed = NA, stringsAsFactors = FALSE
+      )
+    ))
+  }
+
   suggested <- ifelse(abs(x - upper) <= 1e-12 * pmax(upper, 1), stocks$stock_conc, 1 / x)
   rounded <- ifelse(suggested == stocks$stock_conc, suggested, signif_up(suggested, 2))
   if (feasible) {
@@ -144,6 +203,7 @@ optimise_stocks <- function(result, hold = character()) {
       "No set of stocks within max_stock_conc makes every well fit. Narrow the design ranges or reduce the fixed volume."
     },
     worst_fraction = worst,
+    infinite_components = character(),
     stocks = data.frame(
       component = comps,
       units = stocks$units,

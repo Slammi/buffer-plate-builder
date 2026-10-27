@@ -77,9 +77,9 @@ These are the main value over the spreadsheet:
 - **Excel export.** One workbook with all of the above. **Lesson from the Excel version:** make sure only one sheet is selected when saving. Grouped tabs caused edits to overwrite the design sheet.
 
 ## UI layout (Shiny)
-- **Sidebar:** upload the design CSV, upload/download the stock CSV, settings, plate format.
-- **Tab "Stocks":** the editable `rhandsontable`, with the per-component check next to each row. Edits recalculate live.
-- **Tab "Feasibility":** summary counts, worst-case fraction, failing-wells table, minimum-stock suggestions.
+- **Sidebar:** upload the design CSV, upload/download the stock CSV, plate format and layout options.
+- **Tab "Inputs" (front page):** laid out like the Inputs tab of the Excel calculator (`ASR4_Volume_Calculator_Tris.xlsx`). Yellow cells with blue text are inputs; everything else is calculated and updates live. Sections: settings (final/fixed/min volume, overage, dead volume); design factors (units, stock, design min/max, vol. and fraction at max, smallest level and its volume, pipetting check, optional working/max stock, stock notes); constant components; feasibility summary. Checks are green OK / yellow warning / red failure. Per-row checks come from `factor_checks()` / `constant_checks()` in `R/checks.R`.
+- **Tab "Diagnostics":** feasibility rule, failing-wells table, minimum-stock suggestions, optimiser.
 - **Tab "Plate maps":** a component selector and the heatmap.
 - **Tab "Volumes" / "Picklist":** tables plus download buttons.
 
