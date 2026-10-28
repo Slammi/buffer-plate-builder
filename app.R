@@ -59,6 +59,10 @@ $(document).on('shiny:value', function(e) {
 });
 "
 
+# Table headers without underscores ("min_stock_needed" -> "min stock needed").
+# Formatting still refers to the original column names.
+pretty_names <- function(x) sub(" uL$", " (µL)", gsub("_", " ", x))
+
 # Round numeric columns for display.
 round_df <- function(df, digits = 2) {
   df[] <- lapply(df, function(x) if (is.numeric(x)) round(x, digits) else x)
@@ -520,14 +524,16 @@ server <- function(input, output, session) {
   })
 
   output$failing <- renderDT({
-    dt(res()$failing, pct = c("fraction_used", "largest_share"), page = 10)
+    f <- res()$failing
+    dt(f, pct = c("fraction_used", "largest_share"), page = 10, colnames = pretty_names(names(f)))
   })
 
   output$min_stocks <- renderDT({
     m <- res()$min_stocks
     m <- m[, c("component", "units", "stock_conc", "min_stock_needed", "max_stock_conc",
                "fits_now", "exceeds_max", "wells_blocked_by_others")]
-    datatable(m, rownames = FALSE, options = list(dom = "t", pageLength = 100, scrollX = TRUE)) |>
+    datatable(m, rownames = FALSE, colnames = pretty_names(names(m)),
+              options = list(dom = "t", pageLength = 100, scrollX = TRUE)) |>
       formatSignif(c("stock_conc", "min_stock_needed", "max_stock_conc"), 4) |>
       formatStyle("fits_now", color = styleEqual(c(TRUE, FALSE), c("green", "firebrick")))
   })
@@ -558,7 +564,8 @@ server <- function(input, output, session) {
   output$opt_table <- renderDT({
     o <- req(optimised())
     req(o$feasible)
-    datatable(o$stocks, rownames = FALSE, options = list(dom = "t", pageLength = 100)) |>
+    datatable(o$stocks, rownames = FALSE, colnames = pretty_names(names(o$stocks)),
+              options = list(dom = "t", pageLength = 100)) |>
       formatSignif(c("stock_conc", "max_stock_conc", "suggested_stock", "suggested_rounded"), 4) |>
       formatStyle("changed", fontWeight = styleEqual(TRUE, "bold"))
   })
