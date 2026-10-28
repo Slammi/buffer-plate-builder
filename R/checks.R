@@ -20,6 +20,8 @@ factor_checks <- function(dmat, stocks, settings) {
     frac_max <- max(lv) / stock
     chk <- if (is.na(stock) || stock <= 0) {
       c("Enter stock conc.", "warn")
+    } else if (!is.na(st$working_stock_conc) && st$working_stock_conc <= 0) {
+      c("Working stock must be above 0", "bad")
     } else if (frac_max > 1 - s$fixed_volume / V) {
       c("Does not fit at max, even alone", "bad")
     } else if (!is.na(vol_small) && vol_small < s$min_volume - VOL_TOL) {
@@ -53,6 +55,7 @@ constant_checks <- function(stocks, settings) {
   vol <- cst$final_conc / cst$stock_conc * V
   chk <- vapply(seq_len(nrow(cst)), function(i) {
     if (is.na(cst$stock_conc[i]) || is.na(cst$final_conc[i]) || cst$stock_conc[i] <= 0) "Enter stock and final conc.|warn"
+    else if (cst$final_conc[i] < 0) "Final conc. cannot be negative|bad"
     else if (cst$final_conc[i] > cst$stock_conc[i]) "Final conc. exceeds stock|bad"
     else if (vol[i] > VOL_TOL && vol[i] < s$min_volume - VOL_TOL) "Below min - use a diluted working stock|warn"
     else "OK|ok"

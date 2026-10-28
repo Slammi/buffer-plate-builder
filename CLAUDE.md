@@ -35,6 +35,12 @@ Rules:
 - On loading a design, pre-populate a row for each factor. Users can add constant components.
 - **Units are not converted.** The stock must be in the same units as the design values. Show this clearly in the UI.
 
+### Bad input (tested in `tests/testthat/test-inputs.R`)
+- Settings: a cleared or out-of-range value stops the calculation with a plain message (`resolve_settings()`); it must never crash the app.
+- Numbers may use thousands separators (`1,000`); anything else that is not a number is named in the message ("stock conc. '40 mM' is not a number").
+- Design CSV: a column that is mostly numbers stays a component; its bad cells are listed by run (`design_problems()`) and block the calculation. Blank cells count as 0 and are listed. Negative values are errors.
+- Stocks: stock conc. must be > 0; working and max stocks must be > 0 if given; a stock above its max is a visible warning.
+
 ### Settings
 | Setting | Default |
 |---|---|

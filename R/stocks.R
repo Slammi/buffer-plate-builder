@@ -8,7 +8,12 @@ STOCK_COLUMNS <- c("component", "role", "units", "stock_conc", "final_conc",
 STOCK_NUMERIC <- c("stock_conc", "final_conc", "working_stock_conc", "max_stock_conc")
 
 #' Bring a stock data frame to the standard columns and types.
+#'
+#' Values that are not numbers (e.g. "40 mM") become NA; they are kept in
+#' attr(, "unparsed") (component, column, value) so validate_stocks() can
+#' name them.
 normalise_stocks <- function(stocks) {
+  unparsed <- attr(stocks, "unparsed")
   stocks <- as.data.frame(stocks, stringsAsFactors = FALSE)
   names(stocks) <- tolower(trimws(names(stocks)))
   for (col in setdiff(STOCK_COLUMNS, names(stocks))) stocks[[col]] <- rep(NA, nrow(stocks))
@@ -21,9 +26,18 @@ normalise_stocks <- function(stocks) {
   stocks$units[is.na(stocks$units)] <- ""
   stocks$notes <- trimws(as.character(stocks$notes))
   stocks$notes[is.na(stocks$notes)] <- ""
-  for (col in STOCK_NUMERIC) stocks[[col]] <- parse_num(stocks[[col]])
+  for (col in STOCK_NUMERIC) {
+    raw <- trimws(as.character(stocks[[col]]))
+    stocks[[col]] <- parse_num(raw)
+    bad <- !is.na(raw) & raw != "" & raw != "NA" & is.na(stocks[[col]])
+    if (any(bad)) {
+      unparsed <- rbind(unparsed, data.frame(component = stocks$component[bad], column = col,
+                                             value = raw[bad], stringsAsFactors = FALSE))
+    }
+  }
   stocks <- stocks[stocks$component != "", , drop = FALSE]
   rownames(stocks) <- NULL
+  if (!is.null(unparsed) && nrow(unparsed)) attr(stocks, "unparsed") <- unique(unparsed)
   stocks
 }
 
@@ -77,23 +91,46 @@ validate_stocks <- function(stocks, factors) {
     add(comp, "warning", "factor not in the design; ignored")
   }
 
+  unparsed <- attr(stocks, "unparsed")
+  label <- c(stock_conc = "stock conc.", final_conc = "final conc.",
+             working_stock_conc = "working stock", max_stock_conc = "max stock")
+  # A value that was entered but is not a number; NULL if none.
+  not_number <- function(comp, col) {
+    if (is.null(unparsed)) return(NULL)
+    v <- unparsed$value[unparsed$component == comp & unparsed$column == col]
+    if (length(v)) sprintf("%s '%s' is not a number", label[[col]], v[1])
+  }
+
   for (i in seq_len(nrow(stocks))) {
     s <- stocks[i, ]
-    if (is.na(s$stock_conc) || s$stock_conc <= 0) add(s$component, "error", "stock_conc must be > 0")
+    nn <- not_number(s$component, "stock_conc")
+    if (!is.null(nn)) add(s$component, "error", nn)
+    else if (is.na(s$stock_conc)) add(s$component, "error", "stock conc. is missing")
+    else if (s$stock_conc <= 0) add(s$component, "error", "stock conc. must be above 0")
+
     if (s$role == "constant") {
-      if (is.na(s$final_conc) || s$final_conc < 0) {
-        add(s$component, "error", "constant needs final_conc")
-      } else if (!is.na(s$stock_conc) && s$final_conc > s$stock_conc) {
-        add(s$component, "error", "final_conc is above stock_conc")
-      }
+      nn <- not_number(s$component, "final_conc")
+      if (!is.null(nn)) add(s$component, "error", nn)
+      else if (is.na(s$final_conc)) add(s$component, "error", "constant needs a final conc.")
+      else if (s$final_conc < 0) add(s$component, "error", "final conc. cannot be negative")
+      else if (!is.na(s$stock_conc) && s$final_conc > s$stock_conc)
+        add(s$component, "error", "final conc. is above the stock conc.")
     }
-    if (!is.na(s$working_stock_conc)) {
-      if (s$working_stock_conc <= 0) add(s$component, "error", "working_stock_conc must be > 0")
+
+    nn <- not_number(s$component, "working_stock_conc")
+    if (!is.null(nn)) add(s$component, "error", nn)
+    else if (!is.na(s$working_stock_conc)) {
+      if (s$working_stock_conc <= 0) add(s$component, "error", "working stock must be above 0")
       else if (!is.na(s$stock_conc) && s$working_stock_conc >= s$stock_conc)
         add(s$component, "warning", "working stock is not more dilute than the stock")
     }
-    if (!is.na(s$max_stock_conc) && !is.na(s$stock_conc) && s$stock_conc > s$max_stock_conc) {
-      add(s$component, "warning", "stock_conc is above max_stock_conc")
+
+    nn <- not_number(s$component, "max_stock_conc")
+    if (!is.null(nn)) add(s$component, "error", nn)
+    else if (!is.na(s$max_stock_conc)) {
+      if (s$max_stock_conc <= 0) add(s$component, "error", "max stock must be above 0")
+      else if (!is.na(s$stock_conc) && s$stock_conc > s$max_stock_conc)
+        add(s$component, "warning", "stock conc. is above its max stock")
     }
   }
 

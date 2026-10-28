@@ -15,18 +15,40 @@ DEFAULT_SETTINGS <- list(
   replicates = 1
 )
 
-#' Fill in defaults for any settings not given.
+# Number settings: label shown in messages, and whether 0 is allowed.
+SETTING_LIMITS <- list(
+  final_volume = list(label = "Final reaction volume per well (µL)", zero_ok = FALSE),
+  fixed_volume = list(label = "Fixed volume per well (µL)", zero_ok = TRUE),
+  min_volume = list(label = "Minimum pipettable volume (µL)", zero_ok = TRUE),
+  overage = list(label = "Stock overage (fraction)", zero_ok = TRUE),
+  dead_volume = list(label = "Dead volume per source reservoir (µL)", zero_ok = TRUE),
+  replicates = list(label = "Replicates per run", zero_ok = FALSE)
+)
+
+#' Fill in defaults for any settings not given, and check the rest. A cleared
+#' input arrives as NA and is rejected with a plain-language message.
 resolve_settings <- function(settings = list()) {
   unknown <- setdiff(names(settings), names(DEFAULT_SETTINGS))
   if (length(unknown)) stop("Unknown settings: ", paste(unknown, collapse = ", "))
   s <- utils::modifyList(DEFAULT_SETTINGS, settings)
+  for (nm in names(SETTING_LIMITS)) {
+    v <- suppressWarnings(as.numeric(s[[nm]]))
+    lim <- SETTING_LIMITS[[nm]]
+    ok <- length(v) == 1 && is.finite(v) && (if (lim$zero_ok) v >= 0 else v > 0)
+    if (!ok) stop(sprintf("%s must be a number %s 0.", lim$label, if (lim$zero_ok) "of at least" else "above"),
+                  call. = FALSE)
+    s[[nm]] <- v
+  }
+  if (s$fixed_volume >= s$final_volume) {
+    stop("Fixed volume per well must be less than the final reaction volume.", call. = FALSE)
+  }
   s$plate_format <- as.integer(s$plate_format)
   s$fill <- match.arg(s$fill, c("row", "column"))
   s$replicates <- as.integer(s$replicates)
-  if (!s$plate_format %in% c(96L, 384L)) stop("plate_format must be 96 or 384")
-  if (s$final_volume <= 0) stop("final_volume must be > 0")
-  if (s$fixed_volume < 0) stop("fixed_volume must be >= 0")
-  if (s$replicates < 1) stop("replicates must be >= 1")
+  if (!isTRUE(s$plate_format %in% c(96L, 384L))) stop("plate_format must be 96 or 384")
+  if (isTRUE(s$randomize) && !(length(s$seed) == 1 && is.finite(suppressWarnings(as.numeric(s$seed))))) {
+    stop("Seed must be a number when randomizing the run order.", call. = FALSE)
+  }
   s
 }
 

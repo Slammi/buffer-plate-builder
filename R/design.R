@@ -6,9 +6,13 @@
 # Columns that look numeric but are run bookkeeping, not components.
 RUN_ID_PATTERN <- "^(run|runs|run ?order|run ?no\\.?|run ?#|std ?order|standard ?order|block|pattern|id)$"
 
+#' Text to numbers. Blanks and non-numbers become NA. Thousands separators
+#' ("1,000", "12,500.5") are accepted; anything else with a comma is not.
 parse_num <- function(x) {
   x <- trimws(as.character(x))
   x[is.na(x) | x == ""] <- NA
+  thousands <- !is.na(x) & grepl("^-?[0-9]{1,3}(,[0-9]{3})+(\\.[0-9]*)?$", x)
+  x[thousands] <- gsub(",", "", x[thousands])
   suppressWarnings(as.numeric(x))
 }
 
@@ -65,9 +69,12 @@ read_design <- function(file, orientation = c("auto", "runs_in_rows", "runs_in_c
   body <- body[rowSums(body != "") > 0, , drop = FALSE]
   rownames(body) <- NULL
 
+  # A component column is mostly numbers. One typo ("24 %") must not turn a
+  # component into a response column: it stays a component and the bad cell
+  # is reported (design_problems()).
   numeric_col <- vapply(body, function(x) {
     filled <- x != ""
-    any(filled) && all(!is.na(parse_num(x[filled])))
+    any(filled) && mean(!is.na(parse_num(x[filled]))) > 0.5
   }, logical(1))
   run_id <- grepl(RUN_ID_PATTERN, tolower(header))
 
@@ -88,21 +95,45 @@ design_matrix <- function(design, components = design$components) {
   if (length(missing)) stop("Not columns of the design: ", paste(missing, collapse = ", "))
   if (!length(components)) stop("No component columns selected.")
 
-  tab <- design$table[, components, drop = FALSE]
-  has_value <- rowSums(tab != "") > 0
-  tab <- tab[has_value, , drop = FALSE]
-  out <- as.data.frame(lapply(tab, parse_num), check.names = FALSE)
+  probs <- design_problems(design, components)
+  bad <- probs[probs$problem != "blank", , drop = FALSE]
+  if (nrow(bad)) {
+    shown <- utils::head(bad, 5)
+    stop("Design values that are not usable concentrations: ",
+         paste(sprintf("%s run %d '%s' (%s)", shown$column, shown$run, shown$value, shown$problem),
+               collapse = "; "),
+         if (nrow(bad) > 5) sprintf("; and %d more", nrow(bad) - 5), ".", call. = FALSE)
+  }
 
-  bad <- vapply(tab, function(x) any(x != "" & is.na(parse_num(x))), logical(1))
-  if (any(bad)) stop("Non-numeric values in component column(s): ",
-                     paste(components[bad], collapse = ", "))
+  tab <- design$table[, components, drop = FALSE]
+  tab <- tab[rowSums(tab != "") > 0, , drop = FALSE]
+  out <- as.data.frame(lapply(tab, parse_num), check.names = FALSE)
   if (anyNA(out)) {
     warning("Blank cells in component columns treated as 0: ",
             paste(components[colSums(is.na(out)) > 0], collapse = ", "), call. = FALSE)
     out[is.na(out)] <- 0
   }
-  if (any(out < 0)) stop("Negative concentrations in the design.")
   cbind(run = seq_len(nrow(out)), out)
+}
+
+#' Cells in the component columns that need attention: one row per cell with
+#' column, run (design row order), value and problem ("not a number",
+#' "negative" or "blank", which is treated as 0).
+design_problems <- function(design, components = design$components) {
+  tab <- design$table[, intersect(components, design$columns), drop = FALSE]
+  tab <- tab[rowSums(tab != "") > 0, , drop = FALSE]
+  rows <- lapply(names(tab), function(col) {
+    x <- tab[[col]]
+    v <- parse_num(x)
+    problem <- ifelse(x == "", "blank", ifelse(is.na(v), "not a number", ifelse(v < 0, "negative", NA)))
+    hit <- which(!is.na(problem))
+    data.frame(column = rep(col, length(hit)), run = hit, value = x[hit], problem = problem[hit],
+               stringsAsFactors = FALSE)
+  })
+  out <- do.call(rbind, c(rows, list(data.frame(column = character(), run = integer(),
+                                                value = character(), problem = character()))))
+  rownames(out) <- NULL
+  out
 }
 
 print.design <- function(x, ...) {

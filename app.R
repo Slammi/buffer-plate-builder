@@ -315,11 +315,24 @@ server <- function(input, output, session) {
     d <- design()
     if (inherits(d, "design_error")) return(div(class = "text-danger small", d$error))
     det <- c(runs_in_rows = "runs in rows", runs_in_columns = "runs in columns")
-    div(class = "small text-muted mb-2",
-        sprintf("%d runs. Detected: %s.", nrow(design_matrix(d, d$components)),
-                det[[d$detected_orientation]]),
-        if (length(setdiff(d$columns, d$components)))
-          tagList(br(), "Excluded (responses / IDs): ", paste(setdiff(d$columns, d$components), collapse = ", ")))
+    comps <- intersect(input$components %||% d$components, d$columns)
+    n_runs <- sum(rowSums(d$table[, comps, drop = FALSE] != "") > 0)
+    probs <- design_problems(d, comps)
+    bad <- probs[probs$problem != "blank", , drop = FALSE]
+    blanks <- probs[probs$problem == "blank", , drop = FALSE]
+    cell_list <- function(p) paste(sprintf("%s run %d '%s'", p$column, p$run, p$value), collapse = "; ")
+    tagList(
+      div(class = "small text-muted mb-2",
+          sprintf("%d runs. Detected: %s.", n_runs, det[[d$detected_orientation]]),
+          if (length(setdiff(d$columns, d$components)))
+            tagList(br(), "Excluded (responses / IDs): ", paste(setdiff(d$columns, d$components), collapse = ", "))),
+      if (nrow(bad)) div(class = "small text-danger mb-2",
+                         strong("Fix these design cells: "), cell_list(utils::head(bad, 10)),
+                         if (nrow(bad) > 10) sprintf(" … and %d more.", nrow(bad) - 10)),
+      if (nrow(blanks)) div(class = "small text-warning mb-2",
+                            sprintf("%d blank cell(s) counted as 0: ", nrow(blanks)),
+                            cell_list(utils::head(blanks, 10)), if (nrow(blanks) > 10) " …")
+    )
   })
 
   components <- reactive({
@@ -338,6 +351,13 @@ server <- function(input, output, session) {
 
   observeEvent(input$stocks_file, {
     loaded <- read_stocks(input$stocks_file$datapath)
+    unparsed <- attr(loaded, "unparsed")
+    if (!is.null(unparsed)) {
+      showNotification(type = "warning", duration = NULL, paste0(
+        "Not numbers, left blank: ",
+        paste(sprintf("%s %s '%s'", unparsed$component, gsub("_", " ", unparsed$column), unparsed$value),
+              collapse = "; "), ". Enter them on the Inputs page."))
+    }
     comps <- tryCatch(isolate(components()), error = function(e) NULL)
     reseed(if (is.null(comps)) loaded else default_stocks(comps, loaded))
   })
@@ -430,16 +450,24 @@ server <- function(input, output, session) {
     if (!identical(new, isolate(stock_state()))) stock_state(new)
   })
 
+  # Raw values: a cleared number cell arrives as NA and is rejected, with a
+  # message, by resolve_settings(). Defaults only cover inputs not yet bound.
   settings <- reactive({
+    d <- DEFAULT_SETTINGS
     list(
-      final_volume = req(input$final_volume), fixed_volume = input$fixed_volume %||% 0,
-      min_volume = input$min_volume %||% 0, overage = input$overage %||% 0,
-      dead_volume = input$dead_volume %||% 0, plate_format = as.integer(input$plate_format),
-      fill = input$fill, exclude_edges = input$exclude_edges,
-      reserved_wells = input$reserved_wells %||% "", randomize = input$randomize,
-      seed = input$seed %||% 1, replicates = max(1L, as.integer(input$replicates %||% 1))
+      final_volume = input$final_volume %||% d$final_volume,
+      fixed_volume = input$fixed_volume %||% d$fixed_volume,
+      min_volume = input$min_volume %||% d$min_volume,
+      overage = input$overage %||% d$overage,
+      dead_volume = input$dead_volume %||% d$dead_volume,
+      plate_format = as.integer(input$plate_format %||% d$plate_format),
+      fill = input$fill %||% d$fill, exclude_edges = isTRUE(input$exclude_edges),
+      reserved_wells = input$reserved_wells %||% "", randomize = isTRUE(input$randomize),
+      seed = input$seed %||% d$seed, replicates = input$replicates %||% d$replicates
     )
   })
+  settings_error <- reactive(tryCatch({ resolve_settings(settings()); NULL },
+                                      error = function(e) conditionMessage(e)))
   safe_settings <- reactive(tryCatch(resolve_settings(settings()), error = function(e) NULL))
 
   # Push the calculated cells.
@@ -519,6 +547,11 @@ server <- function(input, output, session) {
       ),
       if (!is.null(r) && inherits(r, "build_error"))
         div(class = "alert alert-danger py-2 mt-2", style = "white-space: pre-wrap", r$error),
+      if (ok && any(r$problems$severity == "warning")) {
+        w <- r$problems[r$problems$severity == "warning", ]
+        div(class = "alert alert-warning py-2 mt-2", style = "white-space: pre-wrap",
+            paste0("Check: ", paste(sprintf("%s: %s", w$component, w$problem), collapse = "\n")))
+      },
       if (ok && r$settings$replicates > 1)
         div(class = "small text-muted", sprintf("Counts are per run; each run is in %d wells.", r$settings$replicates))
     )
