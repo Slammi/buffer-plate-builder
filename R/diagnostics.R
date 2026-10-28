@@ -81,6 +81,91 @@ min_stocks <- function(cv, stocks, settings) {
   do.call(rbind, rows)
 }
 
+#' Which stocks cause failing runs, and what would fix them.
+#'
+#' One row per source (each stock, working stocks separately, then water):
+#' - runs_below_min: runs where this source's volume is above 0 but under the
+#'   minimum pipettable volume. Counted in every run, including over-volume
+#'   ones (the Inputs summary counts each run once, OVER VOLUME first).
+#' - over_volume_runs: over-volume runs this source is dispensed into.
+#' - largest_in_over_volume: over-volume runs where it is the largest volume.
+#' - problem: a plain-language fix (largest working stock that keeps the
+#'   smallest level pipettable; smallest stock that makes every well fit).
+#' - status: "ok", "warn" (below min only) or "bad" (largest in over-volume runs).
+stock_problems <- function(result) {
+  s <- result$settings
+  V <- s$final_volume
+  min_v <- s$min_volume
+  cv <- result$concentrations
+  runs <- result$runs
+  over_runs <- runs$run[runs$over_volume]
+  largest_over <- runs$largest_component[runs$over_volume]
+  sources <- unique(cv$source[order(match(cv$component, result$stocks$component))])
+
+  rows <- lapply(sources, function(src) {
+    x <- cv[cv$source == src, ]
+    comp <- x$component[1]
+    st <- result$stocks[result$stocks$component == comp, ]
+    working <- grepl(" \\(working\\)$", src)
+    stock <- if (working) st$working_stock_conc else st$stock_conc
+    used <- x$volume > VOL_TOL
+    small <- used & x$volume < min_v - VOL_TOL
+    n_largest <- if (working) 0L else sum(largest_over == comp)
+    ms <- result$min_stocks[result$min_stocks$component == comp, ]
+
+    fixes <- character()
+    if (any(small)) {
+      max_work <- min(x$conc[small]) * V / min_v
+      fixes <- c(fixes, sprintf(
+        "Below min in %d run(s): use a %sworking stock of at most %s %s for the low levels.",
+        sum(small), if (working) "more dilute " else "", fmt_conc(signif(max_work, 3)), st$units))
+    }
+    if (n_largest > 0) {
+      need <- ms$min_stock_needed
+      fixes <- c(fixes, if (is.finite(need)) {
+        sprintf("Largest volume in %d over-volume run(s): a stock of at least %s %s makes every well fit%s.",
+                n_largest, fmt_conc(signif_up(need, 3)), st$units,
+                if (isTRUE(ms$exceeds_max)) " (above its max stock)" else "")
+      } else {
+        sprintf("Largest volume in %d over-volume run(s), but raising this stock alone can't make them fit.",
+                n_largest)
+      })
+    }
+    data.frame(
+      source = src, units = st$units, stock_conc = stock,
+      runs_below_min = sum(small),
+      smallest_volume_uL = if (any(used)) min(x$volume[used]) else NA_real_,
+      over_volume_runs = sum(used & x$run %in% over_runs),
+      largest_in_over_volume = n_largest,
+      min_stock_to_fit = if (working) NA_real_ else ms$min_stock_needed,
+      problem = if (length(fixes)) paste(fixes, collapse = " ") else "OK",
+      status = if (n_largest > 0) "bad" else if (any(small)) "warn" else "ok",
+      stringsAsFactors = FALSE
+    )
+  })
+
+  # Water: below min means the well is nearly full before water is added.
+  water <- runs$water
+  w_small <- water > VOL_TOL & water < min_v - VOL_TOL
+  rows[[length(rows) + 1]] <- data.frame(
+    source = "Water", units = "", stock_conc = NA_real_,
+    runs_below_min = sum(w_small),
+    smallest_volume_uL = if (any(water > VOL_TOL)) min(water[water > VOL_TOL]) else NA_real_,
+    over_volume_runs = NA_integer_, largest_in_over_volume = NA_integer_, min_stock_to_fit = NA_real_,
+    problem = if (any(w_small)) sprintf(paste0(
+      "Below min in %d run(s): those wells are almost full before water. Use more concentrated ",
+      "stocks for their largest components (or less fixed volume) to leave at least %s µL of water."),
+      sum(w_small), fmt_conc(min_v)) else "OK",
+    status = if (any(w_small)) "warn" else "ok",
+    stringsAsFactors = FALSE
+  )
+
+  out <- do.call(rbind, rows)
+  out <- out[order(match(out$status, c("bad", "warn", "ok"))), , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
+
 # Explain why only infinite stocks would fit. Usually the components whose
 # stock cannot change (held, or already at their max) plus the fixed volume
 # fill whole wells on their own.

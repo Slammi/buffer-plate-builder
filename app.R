@@ -176,6 +176,16 @@ ui <- page_sidebar(
     nav_panel(
       "Diagnostics",
       card(card_header("Feasibility rule"), uiOutput("rule")),
+      card(
+        card_header("Stocks causing failures"),
+        p(class = "text-muted small",
+          "Red: the largest volume in over-volume runs (water < 0). Yellow: below the minimum ",
+          "pipettable volume in some runs. \"Runs below min\" counts every run where that stock is ",
+          "too small, including over-volume runs, so it can be higher than the Inputs summary, ",
+          "which counts each run once."),
+        checkboxInput("problems_only", "Show only stocks with problems", TRUE),
+        DTOutput("stock_problems")
+      ),
       layout_columns(
         col_widths = c(6, 6),
         card(card_header("Failing wells"), DTOutput("failing")),
@@ -523,12 +533,29 @@ server <- function(input, output, session) {
     )
   })
 
-  output$failing <- renderDT({
+  # Tables use server = FALSE: rows are sent with the table instead of
+  # fetched by a later request, which the in-browser (Shinylive) build needs.
+  output$stock_problems <- renderDT(server = FALSE, {
+    p <- stock_problems(res())
+    if (isTRUE(input$problems_only)) p <- p[p$status != "ok", , drop = FALSE]
+    validate(need(nrow(p) > 0, "No stock causes a failing run."))
+    datatable(p, rownames = FALSE, colnames = pretty_names(names(p)),
+              options = list(dom = "t", pageLength = 100, scrollX = TRUE, ordering = FALSE,
+                             columnDefs = list(list(visible = FALSE, targets = match("status", names(p)) - 1)))) |>
+      formatSignif(c("stock_conc", "min_stock_to_fit"), 4) |>
+      formatRound("smallest_volume_uL", 3) |>
+      formatStyle("source", "status", fontWeight = "bold",
+                  backgroundColor = styleEqual(c("bad", "warn", "ok"), c("#FFC7CE", "#FFE699", "#FFFFFF"))) |>
+      formatStyle("problem", "status",
+                  backgroundColor = styleEqual(c("bad", "warn", "ok"), c("#FFC7CE", "#FFE699", "#C6EFCE")))
+  })
+
+  output$failing <- renderDT(server = FALSE, {
     f <- res()$failing
     dt(f, pct = c("fraction_used", "largest_share"), page = 10, colnames = pretty_names(names(f)))
   })
 
-  output$min_stocks <- renderDT({
+  output$min_stocks <- renderDT(server = FALSE, {
     m <- res()$min_stocks
     m <- m[, c("component", "units", "stock_conc", "min_stock_needed", "max_stock_conc",
                "fits_now", "exceeds_max", "wells_blocked_by_others")]
@@ -561,7 +588,7 @@ server <- function(input, output, session) {
   })
   # Only take up space when there is a feasible suggestion to show.
   output$opt_table_ui <- renderUI(if (isTRUE(optimised()$feasible)) DTOutput("opt_table"))
-  output$opt_table <- renderDT({
+  output$opt_table <- renderDT(server = FALSE, {
     o <- req(optimised())
     req(o$feasible)
     datatable(o$stocks, rownames = FALSE, colnames = pretty_names(names(o$stocks)),
@@ -609,11 +636,11 @@ server <- function(input, output, session) {
   }, height = function() map_height())
 
   # ---- Volumes / stock prep / picklist
-  output$volumes <- renderDT({
+  output$volumes <- renderDT(server = FALSE, {
     v <- res()$volumes
     dt(v[, setdiff(names(v), c("row", "col"))], pct = "fraction_used")
   })
-  output$stock_prep <- renderDT(dt(res()$stock_prep, page = 50))
+  output$stock_prep <- renderDT(server = FALSE, dt(res()$stock_prep, page = 50))
 
   observeEvent(res(), {
     current <- isolate(input$addition_order)
@@ -626,7 +653,7 @@ server <- function(input, output, session) {
     c(intersect(ord, def), setdiff(def, ord))
   })
   picklist_table <- reactive(picklist(res()$transfers, addition_order(), input$include_failed))
-  output$picklist <- renderDT(dt(picklist_table(), page = 50))
+  output$picklist <- renderDT(server = FALSE, dt(picklist_table(), page = 50))
 
   # ---- Dragonfly dispense file
   n_plates <- reactive(max(res()$volumes$plate))

@@ -91,6 +91,49 @@ test_that("a stock at its max that fills whole wells is explained", {
   expect_match(o$message, "PEG8000 is at its max stock")
 })
 
+test_that("stock_problems names the stock behind over-volume runs and its fix", {
+  p <- stock_problems(asr4())
+  expect_equal(p$source[1], "PEG8000")
+  peg <- p[p$source == "PEG8000", ]
+  expect_equal(peg$status, "bad")
+  expect_equal(peg$largest_in_over_volume, 18)
+  expect_equal(peg$over_volume_runs, 18)
+  expect_match(peg$problem, "at least 63.9 % v/v makes every well fit")
+  expect_true(all(p$status[p$source != "PEG8000"] == "ok"))
+  expect_equal(tail(p$source, 1), "Water")
+})
+
+test_that("stock_problems suggests a working stock for below-min levels", {
+  stocks <- read_stocks(fixture("ASR4_stocks.csv"))
+  stocks$stock_conc[stocks$component == "Betaine"] <- 1000   # 1 mM -> 0.1 µL, 2 mM -> 0.2 µL
+  r <- asr4(stocks)
+  p <- stock_problems(r)
+  bet <- p[p$source == "Betaine", ]
+  expect_equal(bet$status, "warn")
+  expect_equal(bet$runs_below_min, sum(r$design_matrix$Betaine > 0))
+  expect_equal(bet$smallest_volume_uL, 0.1)
+  expect_match(bet$problem, "working stock of at most 200 mM")   # 1 mM * 100 µL / 0.5 µL
+
+  # With that working stock the problem is gone.
+  stocks$working_stock_conc[stocks$component == "Betaine"] <- 200
+  p2 <- stock_problems(asr4(stocks))
+  expect_true(all(p2$status[startsWith(p2$source, "Betaine")] == "ok"))
+  expect_true("Betaine (working)" %in% p2$source)
+})
+
+test_that("stock_problems flags water below the minimum", {
+  stocks <- read_stocks(fixture("ASR4_stocks.csv"))
+  # Run 43 (worst) has 62.4 µL of other components and 24% PEG: a 64.35% PEG
+  # stock leaves ~0.3 µL of water.
+  stocks$stock_conc[stocks$component == "PEG8000"] <- 64.35
+  r <- asr4(stocks)
+  w <- stock_problems(r)
+  w <- w[w$source == "Water", ]
+  expect_equal(w$runs_below_min, sum(r$runs$water > 0 & r$runs$water < 0.5))
+  expect_gt(w$runs_below_min, 0)
+  expect_equal(w$status, "warn")
+})
+
 test_that("held components are not changed by the optimiser", {
   o <- optimise_stocks(asr4(), hold = "PEG8000")
   expect_true(o$feasible)
