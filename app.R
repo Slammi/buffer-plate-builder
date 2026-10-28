@@ -115,6 +115,11 @@ ui <- page_sidebar(
   fillable = FALSE,
   theme = bs_theme(version = 5, base_font = c("Calibri", "Segoe UI", "Arial", "sans-serif")),
   tags$head(tags$style(HTML(XL_CSS)), tags$script(HTML(XL_JS))),
+  # Load the DataTables library with the page. Otherwise it is fetched when the
+  # first tables arrive together (Diagnostics), and a table that draws before it
+  # has loaded stays blank ("$table.DataTable is not a function"); slow in the
+  # in-browser build especially.
+  div(style = "display: none;", datatable(data.frame(x = 1))),
   sidebar = sidebar(
     width = 320,
     accordion(
@@ -539,15 +544,17 @@ server <- function(input, output, session) {
     p <- stock_problems(res())
     if (isTRUE(input$problems_only)) p <- p[p$status != "ok", , drop = FALSE]
     validate(need(nrow(p) > 0, "No stock causes a failing run."))
+    # The status is shown as a visible "issue" column that drives the colours.
+    p$status <- c(bad = "Over volume", warn = "Below min", ok = "OK")[p$status]
+    p <- p[, c("source", "status", setdiff(names(p), c("source", "status")))]
+    names(p)[names(p) == "status"] <- "issue"
+    colours <- styleEqual(c("Over volume", "Below min", "OK"), c("#FFC7CE", "#FFE699", "#C6EFCE"))
     datatable(p, rownames = FALSE, colnames = pretty_names(names(p)),
-              options = list(dom = "t", pageLength = 100, scrollX = TRUE, ordering = FALSE,
-                             columnDefs = list(list(visible = FALSE, targets = match("status", names(p)) - 1)))) |>
+              options = list(dom = "t", pageLength = 100, scrollX = TRUE, ordering = FALSE)) |>
       formatSignif(c("stock_conc", "min_stock_to_fit"), 4) |>
       formatRound("smallest_volume_uL", 3) |>
-      formatStyle("source", "status", fontWeight = "bold",
-                  backgroundColor = styleEqual(c("bad", "warn", "ok"), c("#FFC7CE", "#FFE699", "#FFFFFF"))) |>
-      formatStyle("problem", "status",
-                  backgroundColor = styleEqual(c("bad", "warn", "ok"), c("#FFC7CE", "#FFE699", "#C6EFCE")))
+      formatStyle("source", fontWeight = "bold") |>
+      formatStyle(c("issue", "problem"), "issue", backgroundColor = colours)
   })
 
   output$failing <- renderDT(server = FALSE, {
