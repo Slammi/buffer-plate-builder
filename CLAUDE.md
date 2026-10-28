@@ -67,7 +67,7 @@ These are the main value over the spreadsheet:
 - **Failing wells.** For each failing well, show how much it overflows and which component takes the largest share of the volume.
 - **Headroom.** Show the remaining headroom in the most crowded well, i.e. how much more could fit.
 - **Minimum stocks.** For each component, calculate the minimum stock needed for all wells to fit, holding the other stocks fixed. Flag it if this exceeds `max_stock_conc`.
-- **Optional optimiser.** Use `lpSolve` or `nloptr` to find a set of stocks within the max limits that makes every well fit, if one exists.
+- **Optional optimiser.** Find a set of stocks within the max limits that makes every well fit, if one exists. Solved with `boot::simplex()` (plain R). Do not use `lpSolve`: its WebAssembly build crashed the in-browser (Shinylive) app on the second optimiser run.
 
 ## Outputs
 - **Plate maps.** A ggplot heatmap per component (µL per well), selectable in the UI. Failing wells are outlined red and below-minimum wells orange.

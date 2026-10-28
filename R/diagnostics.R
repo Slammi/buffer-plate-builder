@@ -227,7 +227,6 @@ signif_up <- function(x, digits = 2) {
 #' concentrated stock (x_i = 0, possible when no max is set) is reported as
 #' not feasible, with the reason.
 optimise_stocks <- function(result, hold = character()) {
-  if (!requireNamespace("lpSolve", quietly = TRUE)) stop("Package lpSolve is needed for the optimiser.")
   stocks <- result$stocks
   conc <- result$concentrations
   s <- result$settings
@@ -246,18 +245,42 @@ optimise_stocks <- function(result, hold = character()) {
   lower[held] <- upper[held]
   lower <- pmin(lower, upper)
 
-  I <- diag(n)
-  mat <- rbind(C, I, I)
-  dir <- c(rep("<=", nrow(C)), rep("<=", n), rep(">=", n))
-  rhs <- c(rep(rhs_fit, nrow(C)), upper, lower)
-  sol <- lpSolve::lp("max", stocks$stock_conc, mat, dir, rhs)
+  # Solve in z_i = Stock_now_i * x_i (1 = unchanged, 0.5 = twice as
+  # concentrated), which keeps the numbers well scaled. boot::simplex() is
+  # plain R: the compiled lpSolve crashed the in-browser (Shinylive) build
+  # when the optimiser was run a second time.
+  # Stocks that cannot change (held, or already at their max) are taken out:
+  # their share of each well is known and is subtracted from the room left.
+  A <- sweep(C, 2, stocks$stock_conc, "/")
+  z_low <- lower * stocks$stock_conc
+  fixed <- z_low >= 1 - 1e-12
+  room <- rhs_fit - rowSums(A[, fixed, drop = FALSE])
+  free <- which(!fixed)
+  Af <- A[, free, drop = FALSE]
+  keep <- rowSums(Af) > 0
+  rows <- unique(cbind(Af, room)[keep, , drop = FALSE])
+  Af <- rows[, seq_along(free), drop = FALSE]
+  room <- pmax(rows[, length(free) + 1], 0)
+  has_low <- z_low[free] > 0
 
-  feasible <- sol$status == 0
-  x <- if (feasible) sol$solution else rep(NA_real_, n)
+  z <- rep(1, n)
+  feasible <- all(rhs_fit - rowSums(A[, fixed, drop = FALSE]) >= -1e-9)
+  if (feasible && length(free)) {
+    sol <- boot::simplex(
+      a = rep(1, length(free)),
+      A1 = rbind(Af, diag(length(free))), b1 = c(room, rep(1, length(free))),
+      A2 = if (any(has_low)) diag(length(free))[has_low, , drop = FALSE],
+      b2 = if (any(has_low)) z_low[free][has_low],
+      maxi = TRUE, n.iter = 20 * (length(free) + nrow(Af)))
+    feasible <- sol$solved == 1
+    z[free] <- sol$soln
+  }
+  if (!feasible) z <- rep(NA_real_, n)
+  x <- z / stocks$stock_conc
 
   # Without a max stock the LP may drive x_i to 0, i.e. an infinitely
   # concentrated stock that uses no volume. That is not a real solution.
-  infinite <- if (feasible) colSums(C) > 0 & x <= upper * 1e-9 else rep(FALSE, n)
+  infinite <- if (feasible) colSums(C) > 0 & z <= 1e-9 else rep(FALSE, n)
   if (any(infinite)) {
     return(list(
       feasible = FALSE,
@@ -272,7 +295,7 @@ optimise_stocks <- function(result, hold = character()) {
     ))
   }
 
-  suggested <- ifelse(abs(x - upper) <= 1e-12 * pmax(upper, 1), stocks$stock_conc, 1 / x)
+  suggested <- ifelse(abs(z - 1) <= 1e-9, stocks$stock_conc, 1 / x)
   rounded <- ifelse(suggested == stocks$stock_conc, suggested, signif_up(suggested, 2))
   if (feasible) {
     over_max <- !is.na(stocks$max_stock_conc) & rounded > stocks$max_stock_conc
