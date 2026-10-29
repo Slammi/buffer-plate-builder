@@ -40,6 +40,12 @@ Rules:
 - Numbers may use thousands separators (`1,000`); anything else that is not a number is named in the message ("stock conc. '40 mM' is not a number").
 - Design CSV: a column that is mostly numbers stays a component; its bad cells are listed by run (`design_problems()`) and block the calculation. Blank cells count as 0 and are listed. Negative values are errors.
 - Stocks: stock conc. must be > 0; working and max stocks must be > 0 if given; a stock above its max is a visible warning.
+- Files (tested in `test-files.R`): comma- or semicolon-separated (semicolon files use decimal commas), BOM, CRLF, blank rows/columns, quoted fields, `µ`/`%` in names, stock columns in any order/case. Component names used by the app's own columns (`RESERVED_NAMES`: Water, Diluent, plate, well, status, total, …) are rejected.
+
+### Tests
+- `Rscript tests/testthat.R` runs everything (~3 min); add `quick` for 20 instead of 120 random designs.
+- `test-app.R`: app workflows through `shiny::testServer()` (helpers in `helper-app.R`; the Inputs cells must be echoed back as the browser would).
+- `test-invariants.R`: rules checked on random designs (volumes add up, status matches volumes, layout, picklist/stock prep/DFD agree, optimiser suggestions fit). A failure names the seed: `random_case(seed)`.
 
 ### Settings
 | Setting | Default |
@@ -73,7 +79,7 @@ These are the main value over the spreadsheet:
 - **Failing wells.** For each failing well, show how much it overflows and which component takes the largest share of the volume.
 - **Headroom.** Show the remaining headroom in the most crowded well, i.e. how much more could fit.
 - **Minimum stocks.** For each component, calculate the minimum stock needed for all wells to fit, holding the other stocks fixed. Flag it if this exceeds `max_stock_conc`.
-- **Optional optimiser.** Find a set of stocks within the max limits that makes every well fit, if one exists. Solved with `boot::simplex()` (plain R). Do not use `lpSolve`: its WebAssembly build crashed the in-browser (Shinylive) app on the second optimiser run.
+- **Optional optimiser.** Find a set of stocks within the max limits that makes every well fit, if one exists. Solved with `boot::simplex()` (plain R). Do not use `lpSolve`: its WebAssembly build crashed the in-browser (Shinylive) app on the second optimiser run. Volumes taken from working stocks are counted as dispensed, and a main stock is never made so concentrated that a pipettable level drops below the minimum.
 
 ## Outputs
 - **Plate maps.** A ggplot heatmap per component (µL per well), selectable in the UI. Failing wells are outlined red and below-minimum wells orange.

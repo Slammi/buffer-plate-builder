@@ -7,6 +7,12 @@ STOCK_COLUMNS <- c("component", "role", "units", "stock_conc", "final_conc",
                    "working_stock_conc", "max_stock_conc", "notes")
 STOCK_NUMERIC <- c("stock_conc", "final_conc", "working_stock_conc", "max_stock_conc")
 
+# Names the app uses for its own columns and sources; a component with one of
+# these names would clash with them (compared ignoring case).
+RESERVED_NAMES <- c("water", "diluent", "fixed", "fixed mix", "total", "plate", "well", "row",
+                    "col", "run", "replicate", "position", "status", "fraction_used",
+                    "largest_component", "below_min_sources")
+
 #' Bring a stock data frame to the standard columns and types.
 #'
 #' Values that are not numbers (e.g. "40 mM") become NA; they are kept in
@@ -42,8 +48,7 @@ normalise_stocks <- function(stocks) {
 }
 
 read_stocks <- function(file) {
-  normalise_stocks(utils::read.csv(file, colClasses = "character", check.names = FALSE,
-                                   strip.white = TRUE, fileEncoding = "UTF-8-BOM"))
+  normalise_stocks(read_csv_text(file, header = TRUE))
 }
 
 write_stocks <- function(stocks, file) {
@@ -81,6 +86,11 @@ validate_stocks <- function(stocks, factors) {
   for (comp in unique(stocks$component[duplicated(key)])) add(comp, "error", "listed more than once")
   for (i in which(!stocks$role %in% c("factor", "constant"))) {
     add(stocks$component[i], "error", sprintf("role '%s' must be factor or constant", stocks$role[i]))
+  }
+
+  names_used <- unique(c(factors, stocks$component[stocks$role == "constant"]))
+  for (comp in names_used[tolower(names_used) %in% RESERVED_NAMES]) {
+    add(comp, "error", sprintf("'%s' is a name used by the app's own columns; rename this component", comp))
   }
 
   fac_rows <- stocks$role == "factor"

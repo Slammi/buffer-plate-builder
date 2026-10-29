@@ -16,14 +16,38 @@ parse_num <- function(x) {
   suppressWarnings(as.numeric(x))
 }
 
-read_raw_csv <- function(path) {
-  raw <- utils::read.csv(path, header = FALSE, colClasses = "character",
+#' Field separator of a CSV: ";" when the first non-blank line has more
+#' semicolons than commas (Excel on European settings), otherwise ",".
+detect_sep <- function(path) {
+  first <- readLines(path, n = 20, warn = FALSE, encoding = "UTF-8")
+  first <- first[nzchar(trimws(first))][1]
+  if (is.na(first)) return(",")
+  count <- function(ch) lengths(regmatches(first, gregexpr(ch, first, fixed = TRUE)))
+  if (count(";") > count(",")) ";" else ","
+}
+
+# In semicolon files the comma is the decimal mark: "2,5" -> "2.5".
+decimal_commas <- function(x) {
+  hit <- !is.na(x) & grepl("^[[:space:]]*-?[0-9]*,[0-9]+[[:space:]]*$", x)
+  x[hit] <- sub(",", ".", x[hit], fixed = TRUE)
+  x
+}
+
+#' Read a CSV as text, whichever separator it uses. Semicolon files have
+#' their decimal commas converted.
+read_csv_text <- function(path, header = FALSE) {
+  sep <- detect_sep(path)
+  raw <- utils::read.csv(path, header = header, sep = sep, colClasses = "character",
                          na.strings = character(), check.names = FALSE,
-                         strip.white = TRUE, fill = TRUE,
-                         fileEncoding = "UTF-8-BOM")
-  raw[] <- lapply(raw, function(x) trimws(ifelse(is.na(x), "", x)))
+                         strip.white = TRUE, fill = TRUE, fileEncoding = "UTF-8-BOM")
+  raw[] <- lapply(raw, function(x) {
+    x <- trimws(ifelse(is.na(x), "", x))
+    if (sep == ";") decimal_commas(x) else x
+  })
   raw
 }
+
+read_raw_csv <- function(path) read_csv_text(path, header = FALSE)
 
 # A label is a non-blank cell that is not a number.
 is_label <- function(x) {

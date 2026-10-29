@@ -50,7 +50,8 @@ failing_wells <- function(runs, volumes) {
 
 #' Minimum stock per component for every well to fit, holding the other
 #' stocks (as actually used, incl. working stocks) and the fixed volume fixed.
-#' The component itself is assumed to come from its main stock.
+#' Levels of the component taken from its working stock keep their volume;
+#' only the levels pipetted from its main stock scale with the stock.
 min_stocks <- function(cv, stocks, settings) {
   V <- settings$final_volume
   frac <- cv$volume / V
@@ -58,9 +59,10 @@ min_stocks <- function(cv, stocks, settings) {
   rows <- lapply(seq_len(nrow(stocks)), function(i) {
     s <- stocks[i, ]
     x <- cv[cv$component == s$component, ]
-    own <- tapply(x$volume / V, x$run, sum)
+    from_main <- !grepl(" \\(working\\)$", x$source)
+    own <- tapply(ifelse(from_main, x$volume / V, 0), x$run, sum)
     avail <- 1 - (run_frac[names(own)] - own)
-    conc <- tapply(x$conc, x$run, max)
+    conc <- tapply(ifelse(from_main, x$conc, 0), x$run, max)
     used <- conc > 0
     need <- if (!any(used)) NA_real_ else {
       if (any(avail[used] <= VOL_TOL)) Inf else max(conc[used] / avail[used])
@@ -166,43 +168,50 @@ stock_problems <- function(result) {
   out
 }
 
-# Explain why only infinite stocks would fit. Usually the components whose
-# stock cannot change (held, or already at their max) plus the fixed volume
-# fill whole wells on their own.
-infinite_stock_message <- function(C, stocks, held, infinite, settings) {
+# Explain why no stocks fit. Usually the volumes that cannot change (held
+# stocks, stocks at their max or pipettable limit, working-stock levels and
+# the fixed volume) fill whole wells on their own. Returns the message and the
+# components left without room ("blocked").
+no_fit_explanation <- function(C, stocks, held, fixed_stock, settings, W = 0) {
   V <- settings$final_volume
   fixed_share <- settings$fixed_volume / V
   at_max <- !is.na(stocks$max_stock_conc) & stocks$stock_conc >= stocks$max_stock_conc
-  fixed_stock <- held | at_max
   share <- sweep(C, 2, stocks$stock_conc, "/")
-  locked <- rowSums(share[, fixed_stock, drop = FALSE]) + fixed_share
-  others <- rowSums(share[, infinite, drop = FALSE]) > 0
-  full <- which(locked >= 1 - 1e-9 & others)
-  inf_names <- paste(stocks$component[infinite], collapse = ", ")
+  locked <- rowSums(share[, fixed_stock, drop = FALSE]) + fixed_share + W
+  full <- which(locked >= 1 - 1e-9)
+  blocked <- !fixed_stock & colSums(C[full, , drop = FALSE]) > 0
+  inf_names <- paste(stocks$component[blocked], collapse = ", ")
 
-  if (length(full)) {
+  message <- if (length(full) && any(fixed_stock)) {
     r <- full[which.max(locked[full])]
     j <- which(fixed_stock)[which.max(share[r, fixed_stock])]
     cmp <- stocks$component[j]
-    why <- if (held[j]) "held" else "at its max stock"
+    why <- if (held[j]) "held" else if (at_max[j]) "at its max stock" else
+      "at the most concentrated stock that keeps its smallest level pipettable"
     advice <- if (held[j]) {
       sprintf("Stop holding %s so its stock can be raised, or lower its maximum level in the design.", cmp)
-    } else {
+    } else if (at_max[j]) {
       sprintf("Raise the max stock for %s if a more concentrated stock can be made, or lower its maximum level in the design.", cmp)
+    } else {
+      sprintf("Add a working stock for %s's low levels, or lower its maximum level in the design.", cmp)
     }
+    alone <- sum(fixed_stock) == 1 && fixed_share == 0 && all(W[full] == 0)
     sprintf(paste0(
       "Not feasible: %s is %s at %s, and in %d run(s) it%s uses %.0f%% of the well ",
-      "(e.g. run %d: level %s / stock %s), leaving no room for %s. ",
-      "Only infinitely concentrated stocks of those would fit. %s"),
+      "(e.g. run %d: level %s / stock %s), %s %s"),
       cmp, why, format(stocks$stock_conc[j]), length(full),
-      if (sum(fixed_stock) > 1 || fixed_share > 0) " (with the other unchangeable volumes)" else " alone",
-      100 * locked[r], r, format(C[r, j]), format(stocks$stock_conc[j]), inf_names, advice)
+      if (alone) " alone" else " (with the other unchangeable volumes)",
+      100 * locked[r], r, format(C[r, j]), format(stocks$stock_conc[j]),
+      if (any(blocked)) sprintf("leaving no room for %s. Only infinitely concentrated stocks of those would fit.", inf_names)
+      else "so those wells cannot fit whatever the other stocks are.",
+      advice)
   } else {
-    sprintf(paste0(
-      "Not feasible: every well would fit only if %s had infinitely concentrated stocks. ",
-      "Set a realistic max stock for them, or narrow the design ranges or reduce the fixed volume."),
-      inf_names)
+    paste0(
+      "Not feasible: no set of stocks within the max stocks makes every well fit while keeping ",
+      "each stock's smallest level pipettable. Set (higher) max stocks, add working stocks for ",
+      "low levels, narrow the design ranges, or reduce the fixed volume.")
   }
+  list(message = message, blocked = stocks$component[blocked])
 }
 
 # Round up to `digits` significant figures (keeps a feasible stock feasible).
@@ -222,25 +231,43 @@ signif_up <- function(x, digits = 2) {
 #'   s.t.      sum(C_ri * x_i) <= 1 - fixed/V  for every run r
 #'             1/max_i <= x_i <= 1/Stock_now_i
 #'
-#' Working stocks are ignored (main stocks only). `hold` names components
-#' whose stock must not change. A solution that needs an infinitely
-#' concentrated stock (x_i = 0, possible when no max is set) is reported as
-#' not feasible, with the reason.
+#' Working stocks: levels taken from a working stock keep their (larger)
+#' volume, which does not depend on the main stock, so it is subtracted from
+#' the room in each well. A main stock is also never made so concentrated
+#' that a level now pipetted from it drops below the minimum volume (it would
+#' switch to the working stock or become BELOW MIN):
+#'             x_i >= min_volume / (V * smallest pipettable main level_i)
+#'
+#' `hold` names components whose stock must not change. A solution that needs
+#' an infinitely concentrated stock (x_i = 0, possible when no max is set) is
+#' reported as not feasible, with the reason.
 optimise_stocks <- function(result, hold = character()) {
   stocks <- result$stocks
-  conc <- result$concentrations
+  cv <- result$concentrations
   s <- result$settings
+  V <- s$final_volume
   comps <- stocks$component
-  C <- vapply(comps, function(cmp) {
-    x <- conc[conc$component == cmp, ]
-    x$conc[order(x$run)]
-  }, numeric(length(unique(conc$run))))
-  C <- matrix(C, ncol = length(comps))
-  rhs_fit <- 1 - s$fixed_volume / s$final_volume
-
   n <- length(comps)
+  n_runs <- max(cv$run)
+
+  # C: levels pipetted from the main stock. W: share of each well that comes
+  # from working stocks.
+  main <- !grepl(" \\(working\\)$", cv$source)
+  C <- matrix(0, n_runs, n)
+  C[cbind(cv$run, match(cv$component, comps))[main, , drop = FALSE]] <- cv$conc[main]
+  W <- numeric(n_runs)
+  w <- tapply(cv$volume[!main] / V, cv$run[!main], sum)
+  W[as.integer(names(w))] <- w
+  rhs_fit <- 1 - s$fixed_volume / V - W
+
   upper <- 1 / stocks$stock_conc
   lower <- ifelse(is.na(stocks$max_stock_conc), 0, 1 / stocks$max_stock_conc)
+  if (s$min_volume > 0) {
+    for (i in seq_len(n)) {
+      pipettable <- C[, i] > 0 & C[, i] / stocks$stock_conc[i] * V >= s$min_volume - VOL_TOL
+      if (any(pipettable)) lower[i] <- max(lower[i], s$min_volume / (V * min(C[pipettable, i])))
+    }
+  }
   held <- tolower(comps) %in% tolower(hold)
   lower[held] <- upper[held]
   lower <- pmin(lower, upper)
@@ -281,12 +308,13 @@ optimise_stocks <- function(result, hold = character()) {
   # Without a max stock the LP may drive x_i to 0, i.e. an infinitely
   # concentrated stock that uses no volume. That is not a real solution.
   infinite <- if (feasible) colSums(C) > 0 & z <= 1e-9 else rep(FALSE, n)
-  if (any(infinite)) {
+  if (!feasible || any(infinite)) {
+    why <- no_fit_explanation(C, stocks, held, fixed, s, W)
     return(list(
       feasible = FALSE,
-      message = infinite_stock_message(C, stocks, held, infinite, s),
+      message = why$message,
       worst_fraction = NA_real_,
-      infinite_components = comps[infinite],
+      infinite_components = if (any(infinite)) comps[infinite] else why$blocked,
       stocks = data.frame(
         component = comps, units = stocks$units, stock_conc = stocks$stock_conc,
         max_stock_conc = stocks$max_stock_conc, suggested_stock = NA_real_,
@@ -297,19 +325,14 @@ optimise_stocks <- function(result, hold = character()) {
 
   suggested <- ifelse(abs(z - 1) <= 1e-9, stocks$stock_conc, 1 / x)
   rounded <- ifelse(suggested == stocks$stock_conc, suggested, signif_up(suggested, 2))
-  if (feasible) {
-    over_max <- !is.na(stocks$max_stock_conc) & rounded > stocks$max_stock_conc
-    rounded[over_max] <- suggested[over_max]
-  }
-  worst <- if (feasible) max(C %*% (1 / rounded)) + s$fixed_volume / s$final_volume else NA_real_
+  # Rounding up must not pass the max stock or the pipettable limit.
+  too_far <- lower > 0 & rounded > (1 / lower) * (1 + 1e-12)
+  rounded[too_far] <- suggested[too_far]
+  worst <- max(C %*% (1 / rounded) + W) + s$fixed_volume / V
 
   list(
-    feasible = feasible,
-    message = if (feasible) {
-      sprintf("Feasible: worst well uses %.1f%% with the suggested stocks.", 100 * worst)
-    } else {
-      "No set of stocks within max_stock_conc makes every well fit. Narrow the design ranges or reduce the fixed volume."
-    },
+    feasible = TRUE,
+    message = sprintf("Feasible: worst well uses %.1f%% with the suggested stocks.", 100 * worst),
     worst_fraction = worst,
     infinite_components = character(),
     stocks = data.frame(
@@ -317,9 +340,9 @@ optimise_stocks <- function(result, hold = character()) {
       units = stocks$units,
       stock_conc = stocks$stock_conc,
       max_stock_conc = stocks$max_stock_conc,
-      suggested_stock = if (feasible) suggested else NA_real_,
-      suggested_rounded = if (feasible) rounded else NA_real_,
-      changed = if (feasible) rounded != stocks$stock_conc else NA,
+      suggested_stock = suggested,
+      suggested_rounded = rounded,
+      changed = rounded != stocks$stock_conc,
       stringsAsFactors = FALSE
     )
   )

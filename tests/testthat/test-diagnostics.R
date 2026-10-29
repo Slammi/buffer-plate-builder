@@ -57,7 +57,7 @@ test_that("optimiser reports infeasible designs", {
   stocks$max_stock_conc <- stocks$stock_conc
   o <- optimise_stocks(asr4(stocks))
   expect_false(o$feasible)
-  expect_match(o$message, "No set of stocks")
+  expect_match(o$message, "^Not feasible")
 })
 
 test_that("a held stock that fills whole wells is infeasible, not infinite stocks", {
@@ -72,7 +72,11 @@ test_that("a held stock that fills whole wells is infeasible, not infinite stock
   expect_false(o$feasible)
   expect_match(o$message, "PEG8000 is held at 30")
   expect_match(o$message, "100% of the well")
-  expect_setequal(o$infinite_components, setdiff(stocks$component, "PEG8000"))
+  # Components left without room. Betaine and CaCl2 (1000 mM) are not listed:
+  # their smallest level is already at the minimum volume, so they cannot be
+  # made more concentrated either.
+  expect_true(all(c("MgCl2", "Kcl", "Trehalose", "TCEP", "Tween20", "Tris-HCl") %in% o$infinite_components))
+  expect_false(any(c("PEG8000", "Betaine", "CaCl2") %in% o$infinite_components))
   expect_true(all(is.na(o$stocks$suggested_rounded)))
 
   # Without the hold, raising the PEG stock is a real solution.
@@ -132,6 +136,39 @@ test_that("stock_problems flags water below the minimum", {
   expect_equal(w$runs_below_min, sum(r$runs$water > 0 & r$runs$water < 0.5))
   expect_gt(w$runs_below_min, 0)
   expect_equal(w$status, "warn")
+})
+
+test_that("the optimiser counts the volume taken from working stocks", {
+  # A = 1 uses the working stock (10 uL, not 0.1 uL from the main stock), so
+  # the run A = 1, B = 95 overflows (105 uL) although main stocks alone fit.
+  raw <- data.frame(V1 = c("A", "0", "1", "1"), V2 = c("B", "95", "95", "0"), stringsAsFactors = FALSE)
+  stocks <- data.frame(component = c("A", "B"), role = "factor", stock_conc = c(1000, 100),
+                       working_stock_conc = c(10, NA))
+  r <- build_plate(read_design(raw), stocks)
+  expect_equal(r$summary$over_volume, 1)
+  o <- optimise_stocks(r)
+  expect_true(o$feasible)
+  b <- o$stocks$suggested_rounded[o$stocks$component == "B"]
+  expect_gte(b, 95 / 0.9)                            # 95 uL must fit in the 90 uL left
+  stocks$stock_conc[2] <- b
+  expect_equal(build_plate(read_design(raw), stocks)$summary$over_volume, 0)
+  expect_equal(o$worst_fraction, max(95 / b + 0.1, 95 / b), tolerance = 1e-9)
+})
+
+test_that("the optimiser does not push a pipettable level below the minimum", {
+  # B's smallest level (5) needs at least 0.5 uL: stock at most 5 * 100 / 0.5 = 1000.
+  raw <- data.frame(V1 = c("A", "60", "0"), V2 = c("B", "50", "5"), stringsAsFactors = FALSE)
+  stocks <- data.frame(component = c("A", "B"), role = "factor", stock_conc = c(100, 100),
+                       max_stock_conc = c(100, NA))
+  r <- build_plate(read_design(raw), stocks)
+  o <- optimise_stocks(r, hold = "A")
+  expect_true(o$feasible)
+  b <- o$stocks$suggested_rounded[o$stocks$component == "B"]
+  expect_lte(b, 1000)
+  stocks$stock_conc[2] <- b
+  r2 <- build_plate(read_design(raw), stocks)
+  expect_equal(r2$summary$over_volume, 0)
+  expect_equal(r2$summary$below_min, 0)
 })
 
 test_that("held components are not changed by the optimiser", {
