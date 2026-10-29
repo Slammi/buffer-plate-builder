@@ -102,14 +102,10 @@ export_excel <- function(result, file, picklist_table = result$picklist) {
   invisible(file)
 }
 
-# Mark only sheet `k` as selected (tabSelected) and active.
+# Make sheet `k` the active, and only selected, sheet. openxlsx writes
+# tabSelected on the active sheet only when saving. (Editing the sheetViews XML
+# by hand once matched "<sheetViews>" and made Excel repair the file.)
 select_single_sheet <- function(wb, k = 1) {
-  for (i in seq_along(wb$worksheets)) {
-    sv <- wb$worksheets[[i]]$sheetViews
-    sv <- gsub(' tabSelected="(1|true|0|false)"', "", sv)
-    if (i == k) sv <- sub("<sheetView", '<sheetView tabSelected="1"', sv)
-    wb$worksheets[[i]]$sheetViews <- sv
-  }
   openxlsx::activeSheet(wb) <- k
   invisible(wb)
 }

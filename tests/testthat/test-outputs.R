@@ -52,8 +52,18 @@ test_that("Excel export has every sheet and exactly one selected tab", {
                  "Failing wells", "Min stocks", "Design"))
   dir <- tempfile()
   utils::unzip(f, exdir = dir)
-  sheets <- list.files(file.path(dir, "xl", "worksheets"), pattern = "\\.xml$", full.names = TRUE)
-  selected <- vapply(sheets, function(x) grepl('tabSelected="(1|true)"', paste(readLines(x, warn = FALSE), collapse = "")), logical(1))
+
+  # Every XML part must be well-formed, or Excel "repairs" the file on opening
+  # (R's own reader is more forgiving, so reading it back is not enough).
+  skip_if_not_installed("xml2")
+  parts <- list.files(dir, pattern = "\\.(xml|rels)$", recursive = TRUE, full.names = TRUE)
+  for (p in parts) expect_no_error(xml2::read_xml(p), message = basename(p))
+
+  sheets <- sort(list.files(file.path(dir, "xl", "worksheets"), pattern = "\\.xml$", full.names = TRUE))
+  selected <- vapply(sheets, function(x) {
+    views <- xml2::xml_find_all(xml2::read_xml(x), ".//*[local-name()='sheetView']")
+    any(xml2::xml_attr(views, "tabSelected") %in% c("1", "true"))
+  }, logical(1))
   expect_equal(sum(selected), 1)
   expect_true(selected[basename(sheets) == "sheet1.xml"])
   vol <- openxlsx::read.xlsx(f, "Volumes")
