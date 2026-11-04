@@ -65,10 +65,3 @@ constant_checks <- function(stocks, settings) {
              check = sub("\\|.*", "", chk), status = sub(".*\\|", "", chk),
              notes = cst$notes, stringsAsFactors = FALSE)
 }
-
-#' Upper bound on the well fraction: every factor at its maximum at once, plus
-#' constants and the fixed volume.
-sum_fraction_at_max <- function(fchecks, cchecks, settings) {
-  s <- resolve_settings(settings)
-  sum(fchecks$fraction_at_max) + sum(cchecks$fraction_of_well) + s$fixed_volume / s$final_volume
-}

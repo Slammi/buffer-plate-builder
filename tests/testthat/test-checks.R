@@ -54,9 +54,3 @@ test_that("constant rows match the Excel layout", {
   stocks$final_conc[stocks$role == "constant"] <- 2000
   expect_equal(asr4_checks(stocks)$c$check, "Final conc. exceeds stock")
 })
-
-test_that("sum of fractions at max adds factors, constants and fixed volume", {
-  x <- asr4_checks(settings = list(fixed_volume = 4))
-  total <- sum_fraction_at_max(x$f, x$c, list(fixed_volume = 4))
-  expect_equal(total, sum(x$f$fraction_at_max) + 0.25 + 0.04)
-})

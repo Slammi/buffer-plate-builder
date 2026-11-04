@@ -522,11 +522,6 @@ server <- function(input, output, session) {
   output$feasibility_summary <- renderUI({
     r <- tryCatch(result(), error = function(e) NULL)
     ok <- !is.null(r) && !inherits(r, "build_error")
-    s <- safe_settings()
-    sum_max <- if (ok) {
-      fc <- factor_checks(r$design_matrix, r$stocks, s)
-      sum_fraction_at_max(fc, constant_checks(r$stocks, s), s)
-    } else NA
     runs <- if (ok) r$runs else NULL
     val <- function(x, cls = "", fmt = fmt_g) tags$td(class = paste("calc", cls), style = "font-weight:700",
                                                       if (ok) fmt(x) else "-")
@@ -541,9 +536,7 @@ server <- function(input, output, session) {
         tags$tr(tags$td("Runs with a volume below min pipettable"), val(n_below, if (isTRUE(n_below > 0)) "warn")),
         tags$tr(tags$td("Runs OK"), val(if (ok) sum(runs$status == "OK") else NA)),
         tags$tr(tags$td("Worst-case well: fraction of volume used before water"),
-                val(worst, if (isTRUE(worst > 1)) "bad", fmt_pct)),
-        tags$tr(tags$td("Sum of all factor fractions at max (+ constant + fixed vol.)"),
-                val(sum_max, if (isTRUE(sum_max > 1)) "bad", fmt_pct))
+                val(worst, if (isTRUE(worst > 1)) "bad", fmt_pct))
       ),
       if (!is.null(r) && inherits(r, "build_error"))
         div(class = "alert alert-danger py-2 mt-2", style = "white-space: pre-wrap", r$error),
